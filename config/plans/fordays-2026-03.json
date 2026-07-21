@@ -13,6 +13,13 @@
     "G": { "code": "G", "recurringPv": 10670, "startBonus": 9640, "maxBaseDepth": 8, "baseLineRates": [0.15, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05] },
     "I": { "code": "I", "recurringPv": 2660, "startBonus": 2130, "maxBaseDepth": 3, "baseLineRates": [0.15, 0.05, 0.05] }
   },
+  "trainerBonuses": {
+    "A": { "PT": 670, "ST_SOLO": 2240, "ST_WITH_PT": 1570 },
+    "B": { "PT": 1680, "ST_SOLO": 5450, "ST_WITH_PT": 3770 },
+    "F": { "PT": 670, "ST_SOLO": 2240, "ST_WITH_PT": 1570 },
+    "G": { "PT": 1680, "ST_SOLO": 5450, "ST_WITH_PT": 3770 },
+    "I": { "PT": 670, "ST_SOLO": 0, "ST_WITH_PT": 0 }
+  },
   "products": [
     { "code": "005510", "name": "ナチュラル DNコラーゲン Aコース", "price": 9950, "pv": 5330, "conversion": 0, "category": "drink", "effectiveFrom": "2026-05-18", "effectiveTo": null },
     { "code": "005520", "name": "ナチュラル DNコラーゲン Bコース", "price": 19900, "pv": 10670, "conversion": 0, "category": "drink", "effectiveFrom": "2026-05-18", "effectiveTo": null },

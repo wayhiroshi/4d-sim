@@ -91,6 +91,7 @@ const simulationSchema = z.object({
   period: periodSchema,
   targetTitle: titleSchema,
   placementCandidateIds: z.array(z.string()).optional(),
+  trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null),
   taxProfile: taxProfileSchema
 });
 
@@ -98,7 +99,8 @@ const simulationMemberSchema = z.object({
   displayName: z.string().trim().min(1).max(80),
   parentMemberId: z.string().min(1).max(80),
   period: periodSchema,
-  course: courseSchema
+  course: courseSchema,
+  trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null)
 });
 
 const forecastSchema = z.object({
@@ -245,6 +247,8 @@ app.post("/api/v1/simulation-members", async (context) => {
     displayName: input.displayName,
     parentMemberId: parent.id,
     introducerMemberId: root.id,
+    trainerMemberId: input.trainerBonusRole ? root.id : null,
+    trainerBonusRole: input.trainerBonusRole,
     course: input.course,
     period: input.period,
     createdAt: new Date().toISOString()

@@ -4,6 +4,7 @@ export type CourseCode = (typeof COURSES)[number];
 export const TITLE_ORDER = ["NONE", "LD", "LL", "DR", "SD", "TD", "TRD"] as const;
 export type TitleCode = (typeof TITLE_ORDER)[number];
 export type TrainerCredential = "NONE" | "PT" | "ST";
+export type TrainerBonusRole = "PT" | "ST_SOLO" | "ST_WITH_PT";
 export type IdKind = "master" | "sub";
 export type PurchaseKind = "initial" | "repeat" | "additional";
 export type RecordStatus = "planned" | "confirmed";
@@ -49,6 +50,7 @@ export interface PlanConfig {
   firstLineLimit: number;
   compression: { enabled: boolean; promoteEndedMembers: boolean; firstLineMayExceedLimit: boolean };
   courses: Record<CourseCode, CourseRule>;
+  trainerBonuses: Record<CourseCode, Record<TrainerBonusRole, number>>;
   products: ProductRule[];
   titles: TitleRule[];
   ld: {
@@ -80,6 +82,7 @@ export interface Member {
   introducerMemberId: string | null;
   masterMemberId: string | null;
   trainerMemberId: string | null;
+  trainerBonusRole?: TrainerBonusRole | null;
   idKind: IdKind;
   course: CourseCode;
   title: TitleCode;
@@ -130,6 +133,8 @@ export interface SimulationMember {
   displayName: string;
   parentMemberId: string;
   introducerMemberId: string;
+  trainerMemberId: string | null;
+  trainerBonusRole: TrainerBonusRole | null;
   course: CourseCode;
   period: string;
   createdAt: string;
@@ -209,7 +214,20 @@ export interface SimulationRequest {
   period: string;
   targetTitle: TitleCode;
   placementCandidateIds?: string[];
+  trainerBonusRole?: TrainerBonusRole | null;
   taxProfile: TaxProfile;
+}
+
+export interface PlacementBonusDelta {
+  start: number;
+  trainer: number;
+  line: number;
+  director: number;
+  title: number;
+  oneTime: number;
+  recurring: number;
+  gross: number;
+  estimatedNet: number;
 }
 
 export interface PlacementResult {
@@ -219,6 +237,7 @@ export interface PlacementResult {
   rank: number | null;
   grossDelta: number;
   estimatedNetDelta: number;
+  bonusDelta: PlacementBonusDelta;
   titleBefore: TitleCode;
   titleAfter: TitleCode;
   missingBefore: number;

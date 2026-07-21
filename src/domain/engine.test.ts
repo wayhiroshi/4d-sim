@@ -62,6 +62,22 @@ describe("official golden line bonus cases", () => {
   });
 });
 
+describe("trainer bonus", () => {
+  it.each([
+    ["A", "PT", 670], ["A", "ST_SOLO", 2240], ["A", "ST_WITH_PT", 1570],
+    ["G", "PT", 1680], ["G", "ST_SOLO", 5450], ["G", "ST_WITH_PT", 3770],
+    ["I", "PT", 670], ["I", "ST_SOLO", 0], ["I", "ST_WITH_PT", 0]
+  ] as const)("calculates %s course %s support as %i yen", (course, trainerBonusRole, expected) => {
+    const root = member("root", null, "G");
+    const candidate = { ...member("candidate", "root", course), trainerMemberId: "root", trainerBonusRole };
+    const data = snapshot(
+      [root, candidate],
+      [purchase("root-repeat", "root", 10670), purchase("candidate-initial", "candidate", course === "G" ? 10670 : course === "I" ? 2660 : 5330, "initial")]
+    );
+    expect(computeBonus(data, "root", tax).trainer).toBe(expected);
+  });
+});
+
 describe("pv and title rules", () => {
   it("excludes the member repeat and includes their additional purchase in group pv", () => {
     const data = snapshot(
@@ -194,6 +210,17 @@ describe("estimated payment", () => {
 });
 
 describe("placement simulation", () => {
+  it("separates one-time and recurring deltas and includes the selected trainer role", () => {
+    const data = snapshot([member("root", null, "G")], [purchase("root", "root", 10670)]);
+    const result = simulatePlacements(data, {
+      candidateName: "候補", course: "A", trainerBonusRole: "PT", period, targetTitle: "LD",
+      placementCandidateIds: ["root"], taxProfile: tax
+    })[0];
+    expect(result?.bonusDelta).toMatchObject({
+      start: 3740, trainer: 670, line: 800, oneTime: 4410, recurring: 800, gross: 5210
+    });
+  });
+
   it("is deterministic, rejects a full line and never mutates the source", () => {
     const members = [member("root", null, "G")];
     for (let index = 0; index < 7; index += 1) members.push(member(`m${index}`, "root"));
@@ -210,14 +237,15 @@ describe("placement simulation", () => {
     const actual = snapshot([member("root", null, "G")], [purchase("p-root", "root", 10670)]);
     const original = structuredClone(actual);
     const trials: SimulationMember[] = [
-      { id: "trial-1", workspaceId: "test", displayName: "仮1", parentMemberId: "root", introducerMemberId: "root", course: "A", period, createdAt: "2026-07-22T00:00:01Z" },
-      { id: "trial-2", workspaceId: "test", displayName: "仮2", parentMemberId: "root", introducerMemberId: "root", course: "A", period, createdAt: "2026-07-22T00:00:02Z" },
-      { id: "trial-3", workspaceId: "test", displayName: "仮3", parentMemberId: "trial-1", introducerMemberId: "root", course: "G", period, createdAt: "2026-07-22T00:00:03Z" }
+      { id: "trial-1", workspaceId: "test", displayName: "仮1", parentMemberId: "root", introducerMemberId: "root", trainerMemberId: "root", trainerBonusRole: "PT", course: "A", period, createdAt: "2026-07-22T00:00:01Z" },
+      { id: "trial-2", workspaceId: "test", displayName: "仮2", parentMemberId: "root", introducerMemberId: "root", trainerMemberId: null, trainerBonusRole: null, course: "A", period, createdAt: "2026-07-22T00:00:02Z" },
+      { id: "trial-3", workspaceId: "test", displayName: "仮3", parentMemberId: "trial-1", introducerMemberId: "root", trainerMemberId: null, trainerBonusRole: null, course: "G", period, createdAt: "2026-07-22T00:00:03Z" }
     ];
     const layered = applySimulationMembers(actual, trials);
     expect(layered.members.map((item) => item.id)).toEqual(["root", "trial-1", "trial-2", "trial-3"]);
     expect(layered.purchases.filter((item) => item.memberId.startsWith("trial-")).length).toBe(6);
     expect(layered.members.find((item) => item.id === "trial-3")?.parentMemberId).toBe("trial-1");
+    expect(computeBonus(layered, "root", tax).trainer).toBe(670);
     expect(simulatePlacements(layered, { candidateName: "仮4", course: "A", period, targetTitle: "LD", taxProfile: tax }).some((item) => item.placementMemberId === "trial-1")).toBe(true);
     expect(actual).toEqual(original);
   });

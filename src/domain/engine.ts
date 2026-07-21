@@ -8,6 +8,7 @@ import {
   type Member,
   type Mission,
   type OrganizationSnapshot,
+  type PlacementBonusDelta,
   type PlacementResult,
   type PurchaseEvent,
   type SimulationMember,
@@ -320,16 +321,16 @@ function computeStartBonus(snapshot: OrganizationSnapshot, rootId: string): numb
 
 function computeTrainerBonus(snapshot: OrganizationSnapshot, rootId: string): number {
   const root = snapshot.members.find((member) => member.id === rootId);
-  if (!root || root.trainerCredential === "NONE" || !isActive(snapshot, rootId)) return 0;
+  if (!root || !isActive(snapshot, rootId)) return 0;
   return snapshot.purchases
     .filter((purchase) => purchase.period === snapshot.period && purchase.kind === "initial" && purchase.status === "confirmed")
     .filter((purchase) => snapshot.members.find((member) => member.id === purchase.memberId)?.trainerMemberId === rootId)
     .reduce((sum, purchase) => {
       const member = snapshot.members.find((item) => item.id === purchase.memberId);
       if (!member) return sum;
-      const bg = member.course === "B" || member.course === "G";
-      if (root.trainerCredential === "PT") return sum + (bg ? 1680 : 670);
-      return sum + (bg ? 5450 : 2240);
+      const role = member.trainerBonusRole
+        ?? (root.trainerCredential === "PT" ? "PT" : root.trainerCredential === "ST" ? "ST_SOLO" : null);
+      return role ? sum + planConfig.trainerBonuses[member.course][role] : sum;
     }, 0);
 }
 
@@ -431,6 +432,26 @@ function missingCount(evaluation: TitleEvaluation): number {
   return evaluation.conditions.filter((condition) => !condition.met).length;
 }
 
+const emptyPlacementBonusDelta = (): PlacementBonusDelta => ({
+  start: 0, trainer: 0, line: 0, director: 0, title: 0,
+  oneTime: 0, recurring: 0, gross: 0, estimatedNet: 0
+});
+
+function placementBonusDelta(before: BonusBreakdown, after: BonusBreakdown): PlacementBonusDelta {
+  const start = after.start - before.start;
+  const trainer = after.trainer - before.trainer;
+  const line = after.line - before.line;
+  const director = after.director - before.director;
+  const title = after.title - before.title;
+  return {
+    start, trainer, line, director, title,
+    oneTime: start + trainer,
+    recurring: line + director + title,
+    gross: after.gross - before.gross,
+    estimatedNet: after.estimatedNet - before.estimatedNet
+  };
+}
+
 function cloneWithCandidate(
   snapshot: OrganizationSnapshot,
   request: SimulationRequest,
@@ -445,7 +466,8 @@ function cloneWithCandidate(
     parentMemberId: placementMemberId,
     introducerMemberId: snapshot.members.find((member) => member.parentMemberId === null)?.id ?? placementMemberId,
     masterMemberId: null,
-    trainerMemberId: null,
+    trainerMemberId: request.trainerBonusRole ? snapshot.members.find((member) => member.parentMemberId === null)?.id ?? null : null,
+    trainerBonusRole: request.trainerBonusRole ?? null,
     idKind: "master",
     course: request.course,
     title: "NONE",
@@ -493,7 +515,8 @@ export function applySimulationMembers(
       parentMemberId: item.parentMemberId,
       introducerMemberId: item.introducerMemberId,
       masterMemberId: null,
-      trainerMemberId: null,
+      trainerMemberId: item.trainerMemberId,
+      trainerBonusRole: item.trainerBonusRole,
       idKind: "master",
       course: item.course,
       title: "NONE",
@@ -536,6 +559,7 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
       return {
         placementMemberId: placement.id, placementMemberName: placement.displayName, eligible: false, rank: null,
         grossDelta: 0, estimatedNetDelta: 0, titleBefore: beforeTitle.achievedTitle, titleAfter: beforeTitle.achievedTitle,
+        bonusDelta: emptyPlacementBonusDelta(),
         missingBefore: missingCount(beforeTitle), missingAfter: missingCount(beforeTitle), earliestAchievementPeriod: null,
         reasons: [], warnings: ["1次ライン上限7名に達しています"]
       };
@@ -543,9 +567,10 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
     const simulated = cloneWithCandidate(snapshot, request, placement.id, String(index + 1));
     const afterTitle = evaluateTitle(simulated, root.id);
     const afterBonus = computeBonus(simulated, root.id, request.taxProfile);
+    const bonusDelta = placementBonusDelta(beforeBonus, afterBonus);
     const reasons = [
       `次タイトルの未達条件が${missingCount(beforeTitle)}件から${missingCount(afterTitle)}件になります`,
-      `総ボーナス概算が${afterBonus.gross - beforeBonus.gross >= 0 ? "+" : ""}${afterBonus.gross - beforeBonus.gross}円変化します`
+      `総ボーナス概算が${bonusDelta.gross >= 0 ? "+" : ""}${bonusDelta.gross}円変化します`
     ];
     if (afterTitle.achievedTitle !== beforeTitle.achievedTitle) reasons.unshift(`${afterTitle.achievedTitle}条件に到達します`);
     return {
@@ -553,15 +578,20 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
       placementMemberName: placement.displayName,
       eligible: true,
       rank: null,
-      grossDelta: afterBonus.gross - beforeBonus.gross,
-      estimatedNetDelta: afterBonus.estimatedNet - beforeBonus.estimatedNet,
+      grossDelta: bonusDelta.gross,
+      estimatedNetDelta: bonusDelta.estimatedNet,
+      bonusDelta,
       titleBefore: beforeTitle.achievedTitle,
       titleAfter: afterTitle.achievedTitle,
       missingBefore: missingCount(beforeTitle),
       missingAfter: missingCount(afterTitle),
       earliestAchievementPeriod: titleAtLeast(afterTitle.achievedTitle, request.targetTitle) ? request.period : null,
       reasons,
-      warnings: ["参考シミュレーションです。登録後の配置は公式サイトで確認してください"]
+      warnings: [
+        "参考シミュレーションです。登録後の配置は公式サイトで確認してください",
+        ...(request.trainerBonusRole ? ["Aさん役の報酬は、該当トレーナー資格を有し申請書へ記載される場合の初回購入時のみです"] : []),
+        ...(request.course === "I" && request.trainerBonusRole?.startsWith("ST") ? ["IコースはSトレーナー対象外のため、トレーナーボーナスは0円です"] : [])
+      ]
     };
   });
   const eligible = results.filter((item) => item.eligible).sort((a, b) => {

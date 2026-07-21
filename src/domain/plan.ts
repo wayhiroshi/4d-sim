@@ -23,6 +23,12 @@ const course = z.object({
   baseLineRates: z.array(z.number().min(0).max(1))
 });
 
+const trainerBonuses = z.object({
+  PT: z.number().int().nonnegative(),
+  ST_SOLO: z.number().int().nonnegative(),
+  ST_WITH_PT: z.number().int().nonnegative()
+});
+
 const planSchema = z.object({
   planId: z.string().min(1),
   version: z.string().min(1),
@@ -32,6 +38,7 @@ const planSchema = z.object({
   firstLineLimit: z.number().int().positive(),
   compression: z.object({ enabled: z.boolean(), promoteEndedMembers: z.boolean(), firstLineMayExceedLimit: z.boolean() }),
   courses: z.record(courseCode, course),
+  trainerBonuses: z.record(courseCode, trainerBonuses),
   products: z.array(product),
   titles: z.array(z.object({
     code: z.enum(["LD", "LL", "DR", "SD", "TD", "TRD"]),

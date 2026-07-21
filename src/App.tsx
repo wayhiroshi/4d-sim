@@ -12,6 +12,7 @@ import {
   type OrganizationSnapshot,
   type PlacementResult,
   type TaxProfile,
+  type TrainerBonusRole,
   type TitleChecklistItem,
   type TitleCode
 } from "./shared/types";
@@ -19,6 +20,12 @@ import {
 const yen = new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY", maximumFractionDigits: 0 });
 const number = new Intl.NumberFormat("ja-JP");
 const DEFAULT_TAX: TaxProfile = { invoiceRegistered: false, withholdingRate: 0, transferFee: 0, offsets: 0, priorCarryover: 0 };
+const TRAINER_ROLE_OPTIONS: Array<{ value: "" | TrainerBonusRole; label: string }> = [
+  { value: "", label: "担当しない・別の方が担当" },
+  { value: "PT", label: "自分がPトレーナーとして担当" },
+  { value: "ST_SOLO", label: "自分がSトレーナーとして単独担当" },
+  { value: "ST_WITH_PT", label: "自分がSトレーナーとしてPトレと同時担当" }
+];
 
 function useLoad<T>(loader: () => Promise<T>, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
@@ -135,7 +142,8 @@ function Organization() {
         displayName: String(values.get("name")),
         course: String(values.get("course")) as CourseCode,
         parentMemberId: String(values.get("parent")),
-        period: snapshot.period
+        period: snapshot.period,
+        trainerBonusRole: String(values.get("trainerRole")) as TrainerBonusRole || null
       });
       form.reset();
       setMessage("仮メンバーを試算中の組織へ追加しました");
@@ -158,6 +166,7 @@ function Organization() {
       <label>試算上の名前<input name="name" required maxLength={80} placeholder={`仮メンバー${data.simulationMembers.length + 1}`} /></label>
       <label>コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label>
       <label>配置先<select name="parent">{snapshot?.members.filter((member) => member.endedPeriod === null).map((member) => <option key={member.id} value={member.id}>{trialIds.has(member.id) ? "【仮】" : ""}{member.displayName}</option>)}</select></label>
+      <label>Aさん役<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
       <button className="secondary-button" disabled={busy}>{busy ? "反映中…" : "試算組織へ追加"}</button>
     </form>
     {message && <p className="status-message">{message}</p>}
@@ -188,7 +197,7 @@ function MemberDetail({ member, snapshot, simulation = false }: { member: Member
   const purchases = snapshot.purchases.filter((purchase) => purchase.memberId === member.id).slice(-5).reverse();
   return <aside className={`panel member-detail${simulation ? " simulation-detail" : ""}`}><p className="eyebrow">{simulation ? "TRIAL MEMBER" : "MEMBER DETAIL"}</p><h2>{member.displayName}{simulation && <em className="trial-tag">仮</em>}</h2>
     {simulation && <p className="trial-note">試算中だけ存在する仮メンバーです。初回・リピート相当を各1件として計算し、公式登録・実組織には反映されません。</p>}
-    <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>タイトル</dt><dd>{member.title}</dd></div><div><dt>ID種別</dt><dd>{member.idKind === "master" ? "マスター" : "サブ"}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div></dl>
+    <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>タイトル</dt><dd>{member.title}</dd></div><div><dt>ID種別</dt><dd>{member.idKind === "master" ? "マスター" : "サブ"}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div>{simulation && <div><dt>Aさん役</dt><dd>{TRAINER_ROLE_OPTIONS.find((option) => option.value === (member.trainerBonusRole ?? ""))?.label ?? "担当なし"}</dd></div>}</dl>
     <h3>購入履歴</h3>{purchases.length ? purchases.map((purchase) => <div className="history-row" key={purchase.id}><span>{purchase.period} · {purchase.kind}</span><strong>{number.format(purchase.pv)} p.v.</strong></div>) : <p className="muted">履歴はありません</p>}
   </aside>;
 }
@@ -206,15 +215,20 @@ function Products() {
 function Simulator() {
   const tree = useLoad(api.simulationOrganization, []); const tax = useLoad(api.tax, []); const goal = useLoad(api.goal, []);
   const [results, setResults] = useState<PlacementResult[]>([]); const [busy, setBusy] = useState(false); const [savingId, setSavingId] = useState<string | null>(null); const [error, setError] = useState<string | null>(null); const [message, setMessage] = useState<string | null>(null);
-  const [candidate, setCandidate] = useState<{ name: string; course: CourseCode } | null>(null);
+  const [candidate, setCandidate] = useState<{ name: string; course: CourseCode; trainerBonusRole: TrainerBonusRole | null } | null>(null);
   const snapshot = tree.data?.snapshot ?? null;
-  const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!tax.data || !goal.data || !snapshot) return; setBusy(true); setError(null); setMessage(null); const values = new FormData(event.currentTarget); const nextCandidate = { name: String(values.get("name")), course: String(values.get("course")) as CourseCode }; try { const response = await api.simulate({ candidateName: nextCandidate.name, course: nextCandidate.course, period: snapshot.period, targetTitle: goal.data.targetTitle, taxProfile: tax.data }); setCandidate(nextCandidate); setResults(response.results); } catch (reason) { setError(reason instanceof Error ? reason.message : "計算できませんでした"); } finally { setBusy(false); } };
-  const addPlacement = async (result: PlacementResult) => { if (!candidate || !snapshot) return; setSavingId(result.placementMemberId); setError(null); try { await api.createSimulationMember({ displayName: candidate.name, course: candidate.course, parentMemberId: result.placementMemberId, period: snapshot.period }); setMessage(`${candidate.name}を${result.placementMemberName}配下の試算組織へ追加しました`); setResults([]); setCandidate(null); tree.reload(); } catch (reason) { setError(reason instanceof Error ? reason.message : "追加できませんでした"); } finally { setSavingId(null); } };
+  const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!tax.data || !goal.data || !snapshot) return; setBusy(true); setError(null); setMessage(null); const values = new FormData(event.currentTarget); const nextCandidate = { name: String(values.get("name")), course: String(values.get("course")) as CourseCode, trainerBonusRole: String(values.get("trainerRole")) as TrainerBonusRole || null }; try { const response = await api.simulate({ candidateName: nextCandidate.name, course: nextCandidate.course, trainerBonusRole: nextCandidate.trainerBonusRole, period: snapshot.period, targetTitle: goal.data.targetTitle, taxProfile: tax.data }); setCandidate(nextCandidate); setResults(response.results); } catch (reason) { setError(reason instanceof Error ? reason.message : "計算できませんでした"); } finally { setBusy(false); } };
+  const addPlacement = async (result: PlacementResult) => { if (!candidate || !snapshot) return; setSavingId(result.placementMemberId); setError(null); try { await api.createSimulationMember({ displayName: candidate.name, course: candidate.course, trainerBonusRole: candidate.trainerBonusRole, parentMemberId: result.placementMemberId, period: snapshot.period }); setMessage(`${candidate.name}を${result.placementMemberName}配下の試算組織へ追加しました`); setResults([]); setCandidate(null); tree.reload(); } catch (reason) { setError(reason instanceof Error ? reason.message : "追加できませんでした"); } finally { setSavingId(null); } };
   return <PageState loading={tree.loading || tax.loading || goal.loading} error={tree.error || tax.error || goal.error}>{snapshot && <><PageHeading kicker="PLACEMENT QUEST" title="配置シミュレーター" description="仮メンバーを追加しながら、複数人を順番に当てはめられます" />
     <section className="trial-banner"><div><strong>試算中 {tree.data?.simulationMembers.length ?? 0}人</strong><small>追加済みの仮メンバーを含めて次の配置を再計算します。</small></div><NavLink to="/organization" className="text-button">組織で確認</NavLink></section>
-    <form className="panel simulator-form" onSubmit={(event) => void submit(event)}><label>試算上の名前<input name="name" required placeholder={`例：仮メンバー${(tree.data?.simulationMembers.length ?? 0) + 1}`} /><small className="field-note">配置確定ボタンを押した場合だけ試算用として保存します</small></label><label>希望コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label><button className="primary-button" disabled={busy}>{busy ? "全配置を計算中…" : "おすすめ配置を計算"}</button></form>{error && <div className="state-card error">{error}</div>}{message && <p className="status-message">{message}。続けて次の人を試算できます。</p>}
-    <div className="results-list">{results.map((result) => <article className={`placement-card rank-${result.rank}`} key={result.placementMemberId}><div className="rank-badge">#{result.rank ?? "-"}</div><div className="placement-heading"><div><small>おすすめ配置</small><h2>{result.placementMemberName} 配下</h2></div><strong className={result.grossDelta >= 0 ? "positive" : "negative"}>{result.grossDelta >= 0 ? "+" : ""}{yen.format(result.grossDelta)}</strong></div><div className="result-stats"><span>タイトル {result.titleBefore} → {result.titleAfter}</span><span>未達 {result.missingBefore} → {result.missingAfter}</span></div><ul>{result.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><button className="primary-button placement-save" disabled={!result.eligible || savingId !== null} onClick={() => void addPlacement(result)}>{savingId === result.placementMemberId ? "試算組織へ追加中…" : "この配置を試算組織へ追加"}</button><p className="warning">{result.warnings.join(" / ")}</p></article>)}</div>
+    <form className="panel simulator-form" onSubmit={(event) => void submit(event)}><label>試算上の名前<input name="name" required placeholder={`例：仮メンバー${(tree.data?.simulationMembers.length ?? 0) + 1}`} /><small className="field-note">配置確定ボタンを押した場合だけ試算用として保存します</small></label><label>希望コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label><label>Aさん役（トレーナー応援）<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small className="field-note">資格を有し、申請書に記載される場合だけ対象</small></label><button className="primary-button" disabled={busy}>{busy ? "全配置を計算中…" : "おすすめ配置を計算"}</button></form>{error && <div className="state-card error">{error}</div>}{message && <p className="status-message">{message}。続けて次の人を試算できます。</p>}
+    <div className="results-list">{results.map((result) => <article className={`placement-card rank-${result.rank}`} key={result.placementMemberId}><div className="rank-badge">#{result.rank ?? "-"}</div><div className="placement-heading"><div><small>おすすめ配置</small><h2>{result.placementMemberName} 配下</h2></div><div className="placement-amount"><small>登録月の総額差</small><strong className={result.grossDelta >= 0 ? "positive" : "negative"}>{result.grossDelta >= 0 ? "+" : ""}{yen.format(result.grossDelta)}</strong></div></div><div className="result-stats"><span>タイトル {result.titleBefore} → {result.titleAfter}</span><span>未達 {result.missingBefore} → {result.missingAfter}</span></div><BonusBreakdownDetails result={result} /><ul>{result.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><button className="primary-button placement-save" disabled={!result.eligible || savingId !== null} onClick={() => void addPlacement(result)}>{savingId === result.placementMemberId ? "試算組織へ追加中…" : "この配置を試算組織へ追加"}</button><p className="warning">{result.warnings.join(" / ")}</p></article>)}</div>
   </>}</PageState>;
+}
+
+function BonusBreakdownDetails({ result }: { result: PlacementResult }) {
+  const delta = result.bonusDelta;
+  return <details className="bonus-details"><summary><span>報酬内訳を見る</span><strong>{yen.format(delta.oneTime)} ＋ {yen.format(delta.recurring)}</strong></summary><div className="bonus-sections"><section><div className="bonus-section-heading"><strong>今回の登録時のみ</strong><span>{yen.format(delta.oneTime)}</span></div><p><span>スタートボーナス</span><b>{yen.format(delta.start)}</b></p><p><span>Aさん役（トレーナー）</span><b>{yen.format(delta.trainer)}</b></p><small>初回購入に対して発生</small></section><section><div className="bonus-section-heading"><strong>定期・追加購入が続く月</strong><span>{yen.format(delta.recurring)}</span></div><p><span>ラインボーナス</span><b>{yen.format(delta.line)}</b></p><p><span>ディレクターボーナス</span><b>{yen.format(delta.director)}</b></p><p><span>タイトルボーナス</span><b>{yen.format(delta.title)}</b></p><small>資格・定期購入・組織条件を満たす月の概算</small></section></div><div className="bonus-total"><span>概算振込額の変化<small>既存ボーナスの繰越解消を含む場合があります</small></span><strong>{yen.format(delta.estimatedNet)}</strong></div></details>;
 }
 
 function Forecast() {
