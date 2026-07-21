@@ -1,5 +1,4 @@
 import type {
-  ActivityEvent,
   DashboardData,
   ForecastResult,
   ForecastScenario,
@@ -7,7 +6,6 @@ import type {
   OrganizationSnapshot,
   PlacementResult,
   ProductRule,
-  Prospect,
   PurchaseEvent,
   SimulationRequest,
   TaxProfile
@@ -29,11 +27,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   dashboard: (period?: string) => request<DashboardData>(`/api/v1/dashboard${period ? `?period=${period}` : ""}`),
   tree: (period?: string) => request<OrganizationSnapshot>(`/api/v1/members/tree${period ? `?period=${period}` : ""}`),
-  prospects: () => request<Prospect[]>("/api/v1/prospects"),
-  createProspect: (prospect: Omit<Prospect, "id" | "workspaceId">) => request<Prospect>("/api/v1/prospects", { method: "POST", body: JSON.stringify(prospect) }),
   products: () => request<{ planVersion: string; products: ProductRule[] }>("/api/v1/products"),
   purchases: (period?: string) => request<PurchaseEvent[]>(`/api/v1/purchases${period ? `?period=${period}` : ""}`),
-  activities: () => request<ActivityEvent[]>("/api/v1/activities"),
   createPurchase: (purchase: Omit<PurchaseEvent, "id" | "workspaceId">) => request<PurchaseEvent>("/api/v1/purchases", { method: "POST", body: JSON.stringify(purchase) }),
   goal: () => request<Goal>("/api/v1/goals"),
   saveGoal: (goal: Pick<Goal, "targetTitle" | "targetPeriod">) => request<Goal>("/api/v1/goals", { method: "PUT", body: JSON.stringify(goal) }),
@@ -41,6 +36,6 @@ export const api = {
   saveTax: (profile: TaxProfile) => request<TaxProfile>("/api/v1/settings/tax", { method: "PUT", body: JSON.stringify(profile) }),
   simulate: (payload: SimulationRequest) => request<{ results: PlacementResult[] }>("/api/v1/simulations", { method: "POST", body: JSON.stringify(payload) }),
   forecast: (payload: { period: string; rootMemberId: string; scenarios: ForecastScenario[] }) => request<{ results: ForecastResult[] }>("/api/v1/forecasts", { method: "POST", body: JSON.stringify(payload) }),
-  previewImport: (kind: "members" | "purchases" | "prospects", csv: string) => request<{ headers: string[]; rows: Array<Record<string, string>>; errors: Array<{ row: number; field: string; message: string }> }>("/api/v1/imports/preview", { method: "POST", body: JSON.stringify({ kind, csv }) }),
-  commitImport: (kind: "members" | "purchases" | "prospects", csv: string) => request<{ imported: number }>("/api/v1/imports/commit", { method: "POST", body: JSON.stringify({ kind, csv }) })
+  previewImport: (kind: "members" | "purchases", csv: string) => request<{ headers: string[]; rows: Array<Record<string, string>>; errors: Array<{ row: number; field: string; message: string }> }>("/api/v1/imports/preview", { method: "POST", body: JSON.stringify({ kind, csv }) }),
+  commitImport: (kind: "members" | "purchases", csv: string) => request<{ imported: number }>("/api/v1/imports/commit", { method: "POST", body: JSON.stringify({ kind, csv }) })
 };

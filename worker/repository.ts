@@ -1,9 +1,7 @@
 import type {
-  ActivityEvent,
   Goal,
   Member,
   OrganizationSnapshot,
-  Prospect,
   PurchaseEvent,
   TaxProfile
 } from "../src/shared/types";
@@ -39,22 +37,6 @@ interface PurchaseRow {
   pv: number;
 }
 
-interface ProspectRow {
-  id: string;
-  workspace_id: string;
-  name: string;
-  age_band: string;
-  introducer_member_id: string | null;
-  temperature: Prospect["temperature"];
-  interest_tags: string;
-  first_contact_date: string | null;
-  product_experience: number;
-  briefing_attended: number;
-  registration_status: Prospect["registrationStatus"];
-  next_action_date: string | null;
-  notes: string;
-}
-
 const mapMember = (row: MemberRow): Member => ({
   id: row.id,
   workspaceId: row.workspace_id,
@@ -86,22 +68,6 @@ const mapPurchase = (row: PurchaseRow): PurchaseEvent => ({
   pv: row.pv
 });
 
-const mapProspect = (row: ProspectRow): Prospect => ({
-  id: row.id,
-  workspaceId: row.workspace_id,
-  name: row.name,
-  ageBand: row.age_band,
-  introducerMemberId: row.introducer_member_id,
-  temperature: row.temperature,
-  interestTags: JSON.parse(row.interest_tags) as string[],
-  firstContactDate: row.first_contact_date,
-  productExperience: row.product_experience === 1,
-  briefingAttended: row.briefing_attended === 1,
-  registrationStatus: row.registration_status,
-  nextActionDate: row.next_action_date,
-  notes: row.notes
-});
-
 export async function loadSnapshot(db: D1Database, workspaceId: string, period: string): Promise<OrganizationSnapshot> {
   const [memberRows, purchaseRows] = await Promise.all([
     db.prepare("SELECT * FROM members WHERE workspace_id = ? ORDER BY created_at, id").bind(workspaceId).all<MemberRow>(),
@@ -113,26 +79,6 @@ export async function loadSnapshot(db: D1Database, workspaceId: string, period: 
     members: memberRows.results.map(mapMember),
     purchases: purchaseRows.results.map(mapPurchase)
   };
-}
-
-export async function listProspects(db: D1Database, workspaceId: string): Promise<Prospect[]> {
-  const rows = await db.prepare(
-    "SELECT * FROM prospects WHERE workspace_id = ? ORDER BY CASE registration_status WHEN 'ready' THEN 0 WHEN 'following' THEN 1 ELSE 2 END, temperature DESC, name"
-  ).bind(workspaceId).all<ProspectRow>();
-  return rows.results.map(mapProspect);
-}
-
-export async function listActivities(db: D1Database, workspaceId: string): Promise<ActivityEvent[]> {
-  const rows = await db.prepare(
-    "SELECT id, workspace_id, prospect_id, member_id, activity_type, occurred_at, next_action_date, note FROM activities WHERE workspace_id = ? ORDER BY occurred_at DESC LIMIT 100"
-  ).bind(workspaceId).all<{
-    id: string; workspace_id: string; prospect_id: string | null; member_id: string | null;
-    activity_type: ActivityEvent["activityType"]; occurred_at: string; next_action_date: string | null; note: string;
-  }>();
-  return rows.results.map((row) => ({
-    id: row.id, workspaceId: row.workspace_id, prospectId: row.prospect_id, memberId: row.member_id,
-    activityType: row.activity_type, occurredAt: row.occurred_at, nextActionDate: row.next_action_date, note: row.note
-  }));
 }
 
 export async function getGoal(db: D1Database, workspaceId: string): Promise<Goal> {
@@ -180,12 +126,4 @@ export const purchaseInsert = (db: D1Database, purchase: PurchaseEvent): D1Prepa
 ).bind(
   purchase.id, purchase.workspaceId, purchase.memberId, purchase.period, purchase.productCode, purchase.kind,
   purchase.status, purchase.quantity, purchase.price, purchase.pv
-);
-
-export const prospectInsert = (db: D1Database, prospect: Prospect): D1PreparedStatement => db.prepare(
-  "INSERT INTO prospects (id, workspace_id, name, age_band, introducer_member_id, temperature, interest_tags, first_contact_date, product_experience, briefing_attended, registration_status, next_action_date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-).bind(
-  prospect.id, prospect.workspaceId, prospect.name, prospect.ageBand, prospect.introducerMemberId, prospect.temperature,
-  JSON.stringify(prospect.interestTags), prospect.firstContactDate, prospect.productExperience ? 1 : 0,
-  prospect.briefingAttended ? 1 : 0, prospect.registrationStatus, prospect.nextActionDate, prospect.notes
 );

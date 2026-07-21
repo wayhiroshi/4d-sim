@@ -1,6 +1,6 @@
 import { COURSES, type CourseCode } from "../shared/types";
 
-export type CsvKind = "members" | "purchases" | "prospects";
+export type CsvKind = "members" | "purchases";
 
 export interface CsvPreview {
   headers: string[];
@@ -61,8 +61,7 @@ export function validateMemberRelationships(
 
 const required: Record<CsvKind, string[]> = {
   members: ["id", "display_name", "parent_id", "introducer_id", "id_kind", "course", "joined_period"],
-  purchases: ["id", "member_id", "period", "kind", "status", "quantity", "price", "pv"],
-  prospects: ["id", "name", "age_band", "temperature", "interest_tags", "registration_status"]
+  purchases: ["id", "member_id", "period", "kind", "status", "quantity", "price", "pv"]
 };
 
 function splitCsvLine(line: string): string[] {
@@ -120,21 +119,11 @@ export function previewCsv(kind: CsvKind, csv: string): CsvPreview {
         if (!Number.isInteger(value) || value < 0) errors.push({ row: rowNumber, field, message: "0以上の整数です" });
       }
     }
-    if (kind === "prospects") {
-      const temperature = Number(row.temperature);
-      if (!Number.isInteger(temperature) || temperature < 1 || temperature > 5) {
-        errors.push({ row: rowNumber, field: "temperature", message: "温度感は1から5です" });
-      }
-      if (!(["lead", "following", "ready", "registered", "paused"] as string[]).includes(row.registration_status ?? "")) {
-        errors.push({ row: rowNumber, field: "registration_status", message: "登録状態が不正です" });
-      }
-    }
   });
   return { headers, rows, errors };
 }
 
 export const CSV_TEMPLATES: Record<CsvKind, string> = {
   members: "id,display_name,parent_id,introducer_id,id_kind,course,joined_period,director_promoted_period\nmember-1,メンバー1,root,root,master,A,2026-07,\n",
-  purchases: "id,member_id,period,kind,status,quantity,price,pv\npurchase-1,member-1,2026-07,repeat,confirmed,1,9950,5330\n",
-  prospects: "id,name,age_band,temperature,interest_tags,registration_status\nprospect-1,候補者1,40代,3,美容|健康維持,following\n"
+  purchases: "id,member_id,period,kind,status,quantity,price,pv\npurchase-1,member-1,2026-07,repeat,confirmed,1,9950,5330\n"
 };

@@ -3,6 +3,7 @@ import {
   computeBonus,
   computeLineBonus,
   evaluateTitle,
+  generateMissions,
   groupPv,
   periodForDate,
   simulatePlacements
@@ -201,5 +202,18 @@ describe("placement simulation", () => {
     expect(first).toEqual(simulatePlacements(data, request));
     expect(first[0]).toMatchObject({ eligible: false, rank: null });
     expect(data).toEqual(original);
+  });
+});
+
+describe("simulation checks", () => {
+  it("builds checks only from unmet title conditions", () => {
+    const title = evaluateTitle(
+      snapshot([member("root", null)], [purchase("root", "root", 5330)]),
+      "root"
+    );
+    const missions = generateMissions(title);
+    expect(missions.length).toBeGreaterThan(0);
+    expect(missions.every((mission) => mission.category === "title")).toBe(true);
+    expect(missions[0]?.title).toContain("不足条件を試算");
   });
 });

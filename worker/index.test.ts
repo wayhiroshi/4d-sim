@@ -18,4 +18,13 @@ describe("Worker API", () => {
     const response = await app.request("https://example.test/api/v1/health", {}, { ...bindings, ACCESS_REQUIRED: "true" });
     expect(response.status).toBe(401);
   });
+
+  it("does not expose relationship-management endpoints", async () => {
+    const prospects = await app.request("https://example.test/api/v1/prospects", {}, bindings);
+    const activities = await app.request("https://example.test/api/v1/activities", {}, bindings);
+    const prospectTemplate = await app.request("https://example.test/api/v1/imports/template/prospects", {}, bindings);
+    expect(prospects.status).toBe(404);
+    expect(activities.status).toBe(404);
+    expect(prospectTemplate.status).toBe(404);
+  });
 });

@@ -13,7 +13,7 @@ export default defineConfig({
       manifest: {
         name: "FORDAYS Navigator",
         short_name: "Navigator",
-        description: "非公式の個人用タイトル攻略シミュレーター",
+        description: "組織・タイトル・報酬・配置の個人用試算ツール",
         theme_color: "#075d3b",
         background_color: "#f4f1e8",
         display: "standalone",

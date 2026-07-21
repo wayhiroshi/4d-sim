@@ -4,7 +4,6 @@ import { api } from "./api";
 import {
   COURSES,
   TITLE_ORDER,
-  type ActivityEvent,
   type CourseCode,
   type ForecastResult,
   type ForecastScenario,
@@ -12,7 +11,6 @@ import {
   type Member,
   type OrganizationSnapshot,
   type PlacementResult,
-  type Prospect,
   type TaxProfile,
   type TitleCode
 } from "./shared/types";
@@ -41,8 +39,8 @@ function PageState({ loading, error, children }: { loading: boolean; error: stri
 }
 
 const navItems = [
-  ["/", "⌂", "ホーム"], ["/organization", "⌘", "組織"], ["/prospects", "◎", "ABC"],
-  ["/simulator", "◇", "配置"], ["/forecast", "↗", "予測"], ["/more", "•••", "その他"]
+  ["/", "⌂", "ホーム"], ["/organization", "⌘", "組織"],
+  ["/simulator", "◇", "配置試算"], ["/forecast", "↗", "将来試算"], ["/more", "•••", "その他"]
 ] as const;
 
 function Layout() {
@@ -57,7 +55,6 @@ function Layout() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/organization" element={<Organization />} />
-          <Route path="/prospects" element={<Prospects />} />
           <Route path="/products" element={<Products />} />
           <Route path="/simulator" element={<Simulator />} />
           <Route path="/forecast" element={<Forecast />} />
@@ -91,8 +88,12 @@ function Dashboard() {
           <Metric label="総ボーナス" value={yen.format(data.bonus.gross)} />
           <Metric label="概算手取" value={yen.format(data.bonus.estimatedNet)} />
         </div>
+        <section className="simulation-actions" aria-label="主な試算">
+          <NavLink to="/simulator" className="simulation-action"><span>◇</span><div><strong>配置を試算</strong><small>全配置を再計算して上位3案を比較</small></div></NavLink>
+          <NavLink to="/forecast" className="simulation-action"><span>↗</span><div><strong>将来を試算</strong><small>3・6・12か月の条件別シナリオ</small></div></NavLink>
+        </section>
         <section className="panel mission-panel">
-          <div className="panel-title"><div><p className="eyebrow">TODAY'S MISSION</p><h2>今日やること</h2></div><span className="star-count">★★★★★</span></div>
+          <div className="panel-title"><div><p className="eyebrow">SIMULATION CHECK</p><h2>試算で確認すること</h2></div><span className="status-chip">最大5件</span></div>
           <ol className="mission-list">
             {data.missions.map((mission) => <li key={mission.id}><span className="mission-check" /><div><strong>{mission.title}</strong><p>{mission.reason}</p></div></li>)}
           </ol>
@@ -115,16 +116,15 @@ function Metric({ label, value, accent = false }: { label: string; value: string
 
 function Organization() {
   const { data, error, loading } = useLoad(api.tree, []);
-  const activities = useLoad(api.activities, []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = data?.members.find((member) => member.id === selectedId) ?? data?.members[0] ?? null;
-  return <PageState loading={loading || activities.loading} error={error || activities.error}>{data && <>
+  return <PageState loading={loading} error={error}>{data && <>
     <PageHeading kicker="ORGANIZATION" title="組織ツリー" description="配置・紹介・サブIDを分けて管理します" />
     <div className="organization-layout">
       <section className="panel tree-panel">
         {data.members.filter((member) => member.parentMemberId === null).map((root) => <TreeNode key={root.id} member={root} snapshot={data} depth={0} selectedId={selected?.id ?? null} onSelect={setSelectedId} />)}
       </section>
-      {selected && <MemberDetail member={selected} snapshot={data} activities={activities.data ?? []} />}
+      {selected && <MemberDetail member={selected} snapshot={data} />}
     </div>
   </>}</PageState>;
 }
@@ -140,39 +140,12 @@ function TreeNode({ member, snapshot, depth, selectedId, onSelect }: { member: M
   </div>;
 }
 
-function MemberDetail({ member, snapshot, activities }: { member: Member; snapshot: OrganizationSnapshot; activities: ActivityEvent[] }) {
+function MemberDetail({ member, snapshot }: { member: Member; snapshot: OrganizationSnapshot }) {
   const purchases = snapshot.purchases.filter((purchase) => purchase.memberId === member.id).slice(-5).reverse();
-  const memberActivities = activities.filter((activity) => activity.memberId === member.id).slice(0, 5);
   return <aside className="panel member-detail"><p className="eyebrow">MEMBER DETAIL</p><h2>{member.displayName}</h2>
     <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>タイトル</dt><dd>{member.title}</dd></div><div><dt>ID種別</dt><dd>{member.idKind === "master" ? "マスター" : "サブ"}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div></dl>
     <h3>購入履歴</h3>{purchases.length ? purchases.map((purchase) => <div className="history-row" key={purchase.id}><span>{purchase.period} · {purchase.kind}</span><strong>{number.format(purchase.pv)} p.v.</strong></div>) : <p className="muted">履歴はありません</p>}
-    <h3>活動履歴</h3>{memberActivities.length ? memberActivities.map((activity) => <div className="history-row" key={activity.id}><span>{activity.occurredAt.slice(0, 10)} · {activity.activityType}</span><strong>{activity.note || "記録"}</strong></div>) : <p className="muted">履歴はありません</p>}
   </aside>;
-}
-
-function Prospects() {
-  const { data, error, loading, reload } = useLoad(api.prospects, []);
-  const [showForm, setShowForm] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); setFormError(null);
-    const values = new FormData(event.currentTarget);
-    try {
-      await api.createProspect({ name: String(values.get("name")), ageBand: String(values.get("ageBand")), introducerMemberId: "root", temperature: Number(values.get("temperature")) as Prospect["temperature"], interestTags: values.getAll("interestTags").map(String), firstContactDate: String(values.get("firstContactDate")) || null, productExperience: values.get("productExperience") === "on", briefingAttended: false, registrationStatus: "lead", nextActionDate: String(values.get("nextActionDate")) || null, notes: String(values.get("notes")) });
-      setShowForm(false); reload();
-    } catch (reason) { setFormError(reason instanceof Error ? reason.message : "登録できませんでした"); }
-  };
-  return <PageState loading={loading} error={error}>{data && <>
-    <PageHeading kicker="ABC CHART" title="候補者カルテ" description="病歴や服薬は保存せず、関心タグで管理します" action={<button className="primary-button" onClick={() => setShowForm((value) => !value)}>＋ 候補者</button>} />
-    {showForm && <form className="panel form-grid" onSubmit={(event) => void submit(event)}>
-      <label>名前<input name="name" required maxLength={80} /></label><label>年代<select name="ageBand"><option>20代</option><option>30代</option><option>40代</option><option>50代</option><option>60代以上</option></select></label>
-      <label>温度感<select name="temperature" defaultValue="3">{[1,2,3,4,5].map((value) => <option key={value} value={value}>{"★".repeat(value)}</option>)}</select></label><label>初回接触日<input name="firstContactDate" type="date" /></label><label>次回予定日<input name="nextActionDate" type="date" /></label>
-      <fieldset><legend>関心タグ</legend>{["美容","食生活","健康維持","運動","家族"].map((tag) => <label className="check-label" key={tag}><input type="checkbox" name="interestTags" value={tag} />{tag}</label>)}</fieldset>
-      <label className="check-label"><input type="checkbox" name="productExperience" />商品体験済み</label><label className="span-2">メモ<textarea name="notes" maxLength={1000} placeholder="病名・診療・服薬などは記録しないでください" /></label>
-      {formError && <p className="form-error span-2">{formError}</p>}<div className="form-actions span-2"><button type="button" className="secondary-button" onClick={() => setShowForm(false)}>キャンセル</button><button className="primary-button">保存</button></div>
-    </form>}
-    <div className="card-list">{data.map((prospect) => <article className="prospect-card" key={prospect.id}><div className="avatar">{prospect.name.slice(0,1)}</div><div className="prospect-main"><div><h3>{prospect.name}</h3><span className={`temperature t-${prospect.temperature}`}>{"★".repeat(prospect.temperature)}</span></div><p>{prospect.ageBand} · {prospect.interestTags.join(" / ") || "関心未設定"}</p><div className="tag-row"><span>{prospect.productExperience ? "体験済" : "未体験"}</span><span>{prospect.briefingAttended ? "説明会済" : "説明会前"}</span><span>{prospect.registrationStatus}</span></div></div><div className="next-date"><small>次回</small><strong>{prospect.nextActionDate ?? "未定"}</strong></div></article>)}</div>
-  </>}</PageState>;
 }
 
 function Products() {
@@ -189,8 +162,8 @@ function Simulator() {
   const tree = useLoad(api.tree, []); const tax = useLoad(api.tax, []); const goal = useLoad(api.goal, []);
   const [results, setResults] = useState<PlacementResult[]>([]); const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!tax.data || !goal.data || !tree.data) return; setBusy(true); setError(null); const values = new FormData(event.currentTarget); try { const response = await api.simulate({ candidateName: String(values.get("name")), course: String(values.get("course")) as CourseCode, period: tree.data.period, targetTitle: goal.data.targetTitle, taxProfile: tax.data }); setResults(response.results); } catch (reason) { setError(reason instanceof Error ? reason.message : "計算できませんでした"); } finally { setBusy(false); } };
-  return <PageState loading={tree.loading || tax.loading || goal.loading} error={tree.error || tax.error || goal.error}>{tree.data && <><PageHeading kicker="PLACEMENT QUEST" title="配置シミュレーター" description="公式登録は変更しません。上位3案を比較します" />
-    <form className="panel simulator-form" onSubmit={(event) => void submit(event)}><label>候補者名<input name="name" required placeholder="候補者" /></label><label>希望コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label><button className="primary-button" disabled={busy}>{busy ? "全配置を計算中…" : "おすすめ配置を計算"}</button></form>{error && <div className="state-card error">{error}</div>}
+  return <PageState loading={tree.loading || tax.loading || goal.loading} error={tree.error || tax.error || goal.error}>{tree.data && <><PageHeading kicker="PLACEMENT QUEST" title="配置シミュレーター" description="入力は試算にだけ使用し、人物カルテとして保存しません" />
+    <form className="panel simulator-form" onSubmit={(event) => void submit(event)}><label>試算上の名前<input name="name" required placeholder="例：新規A" /><small className="field-note">この名前はD1に保存されません</small></label><label>希望コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label><button className="primary-button" disabled={busy}>{busy ? "全配置を計算中…" : "おすすめ配置を計算"}</button></form>{error && <div className="state-card error">{error}</div>}
     <div className="results-list">{results.map((result) => <article className={`placement-card rank-${result.rank}`} key={result.placementMemberId}><div className="rank-badge">#{result.rank ?? "-"}</div><div className="placement-heading"><div><small>おすすめ配置</small><h2>{result.placementMemberName} 配下</h2></div><strong className={result.grossDelta >= 0 ? "positive" : "negative"}>{result.grossDelta >= 0 ? "+" : ""}{yen.format(result.grossDelta)}</strong></div><div className="result-stats"><span>タイトル {result.titleBefore} → {result.titleAfter}</span><span>未達 {result.missingBefore} → {result.missingAfter}</span></div><ul>{result.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><p className="warning">{result.warnings.join(" / ")}</p></article>)}</div>
   </>}</PageState>;
 }
@@ -210,11 +183,11 @@ function Forecast() {
 }
 
 function Imports() {
-  const [kind, setKind] = useState<"members" | "purchases" | "prospects">("members"); const [csv, setCsv] = useState(""); const [preview, setPreview] = useState<{ headers: string[]; rows: Array<Record<string,string>>; errors: Array<{row:number;field:string;message:string}> } | null>(null); const [message, setMessage] = useState<string | null>(null);
+  const [kind, setKind] = useState<"members" | "purchases">("members"); const [csv, setCsv] = useState(""); const [preview, setPreview] = useState<{ headers: string[]; rows: Array<Record<string,string>>; errors: Array<{row:number;field:string;message:string}> } | null>(null); const [message, setMessage] = useState<string | null>(null);
   const loadFile = (file: File | undefined) => { if (!file) return; if (file.size > 1_000_000) { setMessage("CSVは1MB以下にしてください"); return; } void file.text().then(setCsv); };
   const runPreview = async () => { setMessage(null); try { setPreview(await api.previewImport(kind, csv)); } catch (reason) { setMessage(reason instanceof Error ? reason.message : "確認できませんでした"); } };
   const commit = async () => { try { const result = await api.commitImport(kind, csv); setMessage(`${result.imported}件を取り込みました`); setPreview(null); } catch (reason) { setMessage(reason instanceof Error ? reason.message : "取り込めませんでした"); } };
-  return <><PageHeading kicker="CSV IMPORT" title="一括取り込み" description="プレビューで全行を検証してから一括反映します" /><section className="panel import-panel"><label>データ種別<select value={kind} onChange={(event) => { setKind(event.target.value as typeof kind); setPreview(null); }}><option value="members">会員</option><option value="purchases">月次購入</option><option value="prospects">候補者</option></select></label><a className="secondary-button link-button" href={`/api/v1/imports/template/${kind}`}>テンプレート取得</a><label className="file-drop">CSVを選択<input type="file" accept=".csv,text/csv" onChange={(event) => loadFile(event.target.files?.[0])} /><small>最大1MB・UTF-8</small></label><button className="primary-button" onClick={() => void runPreview()} disabled={!csv}>内容を確認</button>{message && <p className="status-message">{message}</p>}</section>{preview && <section className="panel"><div className="panel-title"><h2>{preview.rows.length}件のプレビュー</h2><span className={preview.errors.length ? "status-chip danger" : "status-chip"}>{preview.errors.length ? `${preview.errors.length}件エラー` : "反映可能"}</span></div>{preview.errors.map((issue) => <p className="form-error" key={`${issue.row}-${issue.field}`}>{issue.row}行目 {issue.field}: {issue.message}</p>)}<div className="table-scroll"><table><thead><tr>{preview.headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{preview.rows.slice(0,20).map((row,index) => <tr key={index}>{preview.headers.map((header) => <td key={header}>{row[header]}</td>)}</tr>)}</tbody></table></div><button className="primary-button" disabled={preview.errors.length > 0} onClick={() => void commit()}>全件を一括反映</button></section>}</>;
+  return <><PageHeading kicker="CSV IMPORT" title="一括取り込み" description="プレビューで全行を検証してから一括反映します" /><section className="panel import-panel"><label>データ種別<select value={kind} onChange={(event) => { setKind(event.target.value as typeof kind); setPreview(null); }}><option value="members">会員</option><option value="purchases">月次購入</option></select></label><a className="secondary-button link-button" href={`/api/v1/imports/template/${kind}`}>テンプレート取得</a><label className="file-drop">CSVを選択<input type="file" accept=".csv,text/csv" onChange={(event) => loadFile(event.target.files?.[0])} /><small>最大1MB・UTF-8</small></label><button className="primary-button" onClick={() => void runPreview()} disabled={!csv}>内容を確認</button>{message && <p className="status-message">{message}</p>}</section>{preview && <section className="panel"><div className="panel-title"><h2>{preview.rows.length}件のプレビュー</h2><span className={preview.errors.length ? "status-chip danger" : "status-chip"}>{preview.errors.length ? `${preview.errors.length}件エラー` : "反映可能"}</span></div>{preview.errors.map((issue) => <p className="form-error" key={`${issue.row}-${issue.field}`}>{issue.row}行目 {issue.field}: {issue.message}</p>)}<div className="table-scroll"><table><thead><tr>{preview.headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{preview.rows.slice(0,20).map((row,index) => <tr key={index}>{preview.headers.map((header) => <td key={header}>{row[header]}</td>)}</tr>)}</tbody></table></div><button className="primary-button" disabled={preview.errors.length > 0} onClick={() => void commit()}>全件を一括反映</button></section>}</>;
 }
 
 function Settings() {
@@ -225,7 +198,7 @@ function Settings() {
   return <PageState loading={taxLoad.loading || goalLoad.loading} error={taxLoad.error || goalLoad.error}>{tax && goal && <><PageHeading kicker="SETTINGS" title="目標と概算条件" description="概算手取の条件は公式明細と分けて管理します" /><section className="panel form-grid"><label>目標タイトル<select value={goal.targetTitle} onChange={(event) => setGoal({ ...goal, targetTitle: event.target.value as TitleCode })}>{TITLE_ORDER.filter((title) => title !== "NONE").map((title) => <option key={title}>{title}</option>)}</select></label><label>目標営業月<input type="month" value={goal.targetPeriod} onChange={(event) => setGoal({ ...goal, targetPeriod: event.target.value })} /></label><label className="check-label span-2"><input type="checkbox" checked={tax.invoiceRegistered} onChange={(event) => setTax({ ...tax, invoiceRegistered: event.target.checked })} />適格請求書発行事業者として登録済み</label><label>源泉徴収率<input type="number" min="0" max="100" step="0.01" value={tax.withholdingRate * 100} onChange={(event) => setTax({ ...tax, withholdingRate: Number(event.target.value) / 100 })} />%</label><label>振込手数料<input type="number" min="0" value={tax.transferFee} onChange={(event) => setTax({ ...tax, transferFee: Number(event.target.value) })} /></label><label>相殺額<input type="number" min="0" value={tax.offsets} onChange={(event) => setTax({ ...tax, offsets: Number(event.target.value) })} /></label><label>前月繰越<input type="number" min="0" value={tax.priorCarryover} onChange={(event) => setTax({ ...tax, priorCarryover: Number(event.target.value) })} /></label><div className="form-actions span-2"><button className="primary-button" onClick={() => void save()}>{saved ? "保存しました" : "設定を保存"}</button></div></section><p className="disclaimer">源泉徴収、インボイス経過措置、相殺、手数料を用いた概算です。税務判断には使用せず、公式支払明細と専門家の確認を優先してください。</p></>}</PageState>;
 }
 
-function More() { return <><PageHeading kicker="TOOLS" title="その他" description="管理とマスタ機能" /><div className="menu-grid"><NavLink to="/products"><span>▦</span><strong>商品マスタ</strong><small>価格・p.v.自動計算</small></NavLink><NavLink to="/imports"><span>⇩</span><strong>CSV取り込み</strong><small>会員・購入・候補者</small></NavLink><NavLink to="/settings"><span>⚙</span><strong>設定</strong><small>目標・概算条件</small></NavLink></div><section className="panel about-card"><h2>このアプリについて</h2><p>公式資料を設定データとして扱う、非公式の個人用攻略シミュレーターです。公式サイトへの自動ログイン、登録、購入は行いません。</p><p>病歴・診療・服薬などの要配慮個人情報、口座、実会員IDは保存しないでください。</p></section></>; }
+function More() { return <><PageHeading kicker="TOOLS" title="その他" description="試算に使う設定とマスタ" /><div className="menu-grid"><NavLink to="/products"><span>▦</span><strong>商品マスタ</strong><small>価格・p.v.自動計算</small></NavLink><NavLink to="/imports"><span>⇩</span><strong>CSV取り込み</strong><small>会員・月次購入</small></NavLink><NavLink to="/settings"><span>⚙</span><strong>設定</strong><small>目標・概算条件</small></NavLink></div><section className="panel about-card"><h2>このアプリについて</h2><p>組織、タイトル、報酬、配置、将来条件の試算を行う、非公式の個人用シミュレーターです。公式サイトへの自動ログイン、登録、購入は行いません。</p><p>人物・関係性・フォローの管理は「つながりカルテ」で行い、Navigatorには保存しません。将来連携する場合も、試算に必要な最小限のデータだけを受け取ります。</p></section></>; }
 
 function PageHeading({ kicker, title, description, action }: { kicker: string; title: string; description: string; action?: ReactNode }) { return <div className="page-heading"><div><p className="eyebrow">{kicker}</p><h1>{title}</h1><p>{description}</p></div>{action}</div>; }
 

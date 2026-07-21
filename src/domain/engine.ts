@@ -9,7 +9,6 @@ import {
   type Mission,
   type OrganizationSnapshot,
   type PlacementResult,
-  type Prospect,
   type PurchaseEvent,
   type SimulationRequest,
   type TaxProfile,
@@ -480,47 +479,26 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
   return results.sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER)).slice(0, 3);
 }
 
-export function generateMissions(
-  prospects: Prospect[],
-  title: TitleEvaluation,
-  today: string
-): Mission[] {
-  const missions: Mission[] = [];
-  for (const prospect of prospects) {
-    if (prospect.registrationStatus === "registered" || prospect.registrationStatus === "paused") continue;
-    const overdue = prospect.nextActionDate !== null && prospect.nextActionDate <= today;
-    if (overdue) {
-      missions.push({
-        id: `prospect-${prospect.id}`,
-        priority: 100 + prospect.temperature * 10,
-        category: "followup",
-        title: `${prospect.name}${prospect.name.endsWith("さん") ? "" : "さん"}へ連絡`,
-        reason: `次回予定日を過ぎています。説明や登録を迫らず、状況を確認してください。`,
-        dueDate: prospect.nextActionDate
-      });
-    }
-  }
-  for (const condition of title.conditions.filter((item) => !item.met).slice(0, 2)) {
-    missions.push({
+export function generateMissions(title: TitleEvaluation): Mission[] {
+  const missions = title.conditions.filter((item) => !item.met).slice(0, 5).map((condition, index): Mission => ({
       id: `title-${condition.key}`,
-      priority: 80,
+      priority: 100 - index,
       category: "title",
-      title: `${title.nextTitle ?? "次タイトル"}条件を確認`,
+      title: `${title.nextTitle ?? "次タイトル"}の不足条件を試算`,
       reason: `${condition.label}: 現在 ${String(condition.current)} / 必要 ${String(condition.required)}`,
       dueDate: null
-    });
-  }
+    }));
   if (!missions.length) {
     missions.push({
       id: "data-review",
       priority: 10,
       category: "data",
-      title: "今月の実績を確認",
-      reason: "購入実績と活動履歴を最新にすると、攻略結果の精度が上がります。",
-      dueDate: today
+      title: "次の試算条件を設定",
+      reason: "現在の入力では次タイトル条件を満たしています。配置・将来試算で次のシナリオを比較してください。",
+      dueDate: null
     });
   }
-  return missions.sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id)).slice(0, 5);
+  return missions;
 }
 
 export function runForecast(

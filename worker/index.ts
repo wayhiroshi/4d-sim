@@ -14,21 +14,16 @@ import { planConfig } from "../src/domain/plan";
 import {
   COURSES,
   TITLE_ORDER,
-  type ActivityEvent,
   type DashboardData,
   type Goal,
   type Member,
-  type Prospect,
   type PurchaseEvent,
 } from "../src/shared/types";
 import {
   getGoal,
   getTaxProfile,
-  listActivities,
-  listProspects,
   loadSnapshot,
   memberInsert,
-  prospectInsert,
   purchaseInsert,
   upsertGoal,
   upsertTaxProfile
@@ -46,7 +41,6 @@ const courseSchema = z.enum(COURSES);
 const titleSchema = z.enum(TITLE_ORDER);
 const periodSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 const nullableId = z.string().min(1).nullable().optional();
-const temperatureSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]);
 const taxProfileSchema = z.object({
   invoiceRegistered: z.boolean(),
   withholdingRate: z.number().min(0).max(1),
@@ -84,32 +78,7 @@ const purchaseSchema = z.object({
   pv: z.number().int().nonnegative()
 });
 
-const prospectSchema = z.object({
-  id: z.string().min(1).max(80).optional(),
-  name: z.string().min(1).max(80),
-  ageBand: z.string().max(20).default(""),
-  introducerMemberId: nullableId,
-  temperature: temperatureSchema,
-  interestTags: z.array(z.enum(["美容", "食生活", "健康維持", "運動", "家族"])).max(5),
-  firstContactDate: z.string().nullable().default(null),
-  productExperience: z.boolean().default(false),
-  briefingAttended: z.boolean().default(false),
-  registrationStatus: z.enum(["lead", "following", "ready", "registered", "paused"]),
-  nextActionDate: z.string().nullable().default(null),
-  notes: z.string().max(1000).default("")
-});
-
-const activitySchema = z.object({
-  prospectId: z.string().nullable().default(null),
-  memberId: z.string().nullable().default(null),
-  activityType: z.enum(["contact", "experience", "briefing", "followup", "registration", "memo"]),
-  occurredAt: z.string().min(10),
-  nextActionDate: z.string().nullable().default(null),
-  note: z.string().max(1000).default("")
-}).refine((value) => value.prospectId !== null || value.memberId !== null, "対象が必要です");
-
 const simulationSchema = z.object({
-  prospectId: z.string().optional(),
   candidateName: z.string().min(1).max(80),
   course: courseSchema,
   period: periodSchema,
@@ -185,9 +154,8 @@ app.get("/api/v1/health", (context) => context.json({ ok: true, app: "fordays-na
 app.get("/api/v1/dashboard", async (context) => {
   const workspaceId = context.get("workspaceId");
   const period = await selectedPeriod(context.env.DB, context.req.query("period"));
-  const [snapshot, prospects, taxProfile] = await Promise.all([
+  const [snapshot, taxProfile] = await Promise.all([
     loadSnapshot(context.env.DB, workspaceId, period),
-    listProspects(context.env.DB, workspaceId),
     getTaxProfile(context.env.DB, workspaceId)
   ]);
   const rootMember = snapshot.members.find((member) => member.parentMemberId === null);
@@ -201,7 +169,7 @@ app.get("/api/v1/dashboard", async (context) => {
     groupMembers: snapshot.members.length - 1,
     title,
     bonus,
-    missions: generateMissions(prospects, title, new Date().toISOString().slice(0, 10))
+    missions: generateMissions(title)
   };
   return context.json(data);
 });
@@ -254,39 +222,6 @@ app.post("/api/v1/purchases", async (context) => {
   return context.json(purchase, 201);
 });
 
-app.get("/api/v1/prospects", async (context) => context.json(await listProspects(context.env.DB, context.get("workspaceId"))));
-
-app.post("/api/v1/prospects", async (context) => {
-  const input = await boundedJson(context.req.raw, prospectSchema);
-  const prospect: Prospect = {
-    id: input.id ?? crypto.randomUUID(), workspaceId: context.get("workspaceId"), name: input.name, ageBand: input.ageBand,
-    introducerMemberId: input.introducerMemberId ?? null, temperature: input.temperature, interestTags: input.interestTags,
-    firstContactDate: input.firstContactDate, productExperience: input.productExperience, briefingAttended: input.briefingAttended,
-    registrationStatus: input.registrationStatus, nextActionDate: input.nextActionDate, notes: input.notes
-  };
-  await prospectInsert(context.env.DB, prospect).run();
-  return context.json(prospect, 201);
-});
-
-app.get("/api/v1/activities", async (context) => context.json(await listActivities(context.env.DB, context.get("workspaceId"))));
-
-app.post("/api/v1/activities", async (context) => {
-  const input = await boundedJson(context.req.raw, activitySchema);
-  const activity: ActivityEvent = {
-    id: crypto.randomUUID(), workspaceId: context.get("workspaceId"), prospectId: input.prospectId,
-    memberId: input.memberId, activityType: input.activityType, occurredAt: input.occurredAt,
-    nextActionDate: input.nextActionDate, note: input.note
-  };
-  await context.env.DB.prepare(
-    "INSERT INTO activities (id, workspace_id, prospect_id, member_id, activity_type, occurred_at, next_action_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-  ).bind(activity.id, activity.workspaceId, activity.prospectId, activity.memberId, activity.activityType, activity.occurredAt, activity.nextActionDate, activity.note).run();
-  if (activity.prospectId && activity.nextActionDate) {
-    await context.env.DB.prepare("UPDATE prospects SET next_action_date = ?, updated_at = CURRENT_TIMESTAMP WHERE workspace_id = ? AND id = ?")
-      .bind(activity.nextActionDate, activity.workspaceId, activity.prospectId).run();
-  }
-  return context.json(activity, 201);
-});
-
 app.get("/api/v1/goals", async (context) => context.json(await getGoal(context.env.DB, context.get("workspaceId"))));
 
 app.put("/api/v1/goals", async (context) => {
@@ -325,12 +260,12 @@ app.get("/api/v1/imports/template/:kind", (context) => {
 });
 
 app.post("/api/v1/imports/preview", async (context) => {
-  const input = await boundedJson(context.req.raw, z.object({ kind: z.enum(["members", "purchases", "prospects"]), csv: z.string().max(1_000_000) }));
+  const input = await boundedJson(context.req.raw, z.object({ kind: z.enum(["members", "purchases"]), csv: z.string().max(1_000_000) }));
   return context.json(previewCsv(input.kind, input.csv));
 });
 
 app.post("/api/v1/imports/commit", async (context) => {
-  const input = await boundedJson(context.req.raw, z.object({ kind: z.enum(["members", "purchases", "prospects"]), csv: z.string().max(1_000_000) }));
+  const input = await boundedJson(context.req.raw, z.object({ kind: z.enum(["members", "purchases"]), csv: z.string().max(1_000_000) }));
   const preview = previewCsv(input.kind, input.csv);
   if (preview.errors.length) return context.json({ error: "CSVにエラーがあります", preview }, 400);
   const workspaceId = context.get("workspaceId");
@@ -364,22 +299,6 @@ app.post("/api/v1/imports/commit", async (context) => {
         status: z.enum(["planned", "confirmed"]).parse(row.status), quantity: Number(row.quantity), price: Number(row.price), pv: Number(row.pv)
       };
       statements.push(purchaseInsert(context.env.DB, purchase));
-    }
-  } else {
-    const existingProspects = await listProspects(context.env.DB, workspaceId);
-    const prospectIds = new Set(existingProspects.map((prospect) => prospect.id));
-    const duplicate = preview.rows.find((row) => prospectIds.has(row.id ?? ""));
-    if (duplicate) return context.json({ error: `既存候補者IDと重複しています: ${duplicate.id ?? ""}` }, 400);
-    for (const row of preview.rows) {
-      const prospect: Prospect = {
-        id: row.id ?? "", workspaceId, name: row.name ?? "", ageBand: row.age_band ?? "", introducerMemberId: null,
-        temperature: temperatureSchema.parse(Number(row.temperature)),
-        interestTags: (row.interest_tags ?? "").split("|").filter(Boolean), firstContactDate: null,
-        productExperience: false, briefingAttended: false,
-        registrationStatus: z.enum(["lead", "following", "ready", "registered", "paused"]).parse(row.registration_status),
-        nextActionDate: null, notes: ""
-      };
-      statements.push(prospectInsert(context.env.DB, prospect));
     }
   }
   statements.push(context.env.DB.prepare("INSERT INTO import_runs (id, workspace_id, kind, row_count) VALUES (?, ?, ?, ?)")

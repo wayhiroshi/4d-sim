@@ -103,33 +103,6 @@ export interface PurchaseEvent {
   pv: number;
 }
 
-export interface Prospect {
-  id: string;
-  workspaceId: string;
-  name: string;
-  ageBand: string;
-  introducerMemberId: string | null;
-  temperature: 1 | 2 | 3 | 4 | 5;
-  interestTags: string[];
-  firstContactDate: string | null;
-  productExperience: boolean;
-  briefingAttended: boolean;
-  registrationStatus: "lead" | "following" | "ready" | "registered" | "paused";
-  nextActionDate: string | null;
-  notes: string;
-}
-
-export interface ActivityEvent {
-  id: string;
-  workspaceId: string;
-  prospectId: string | null;
-  memberId: string | null;
-  activityType: "contact" | "experience" | "briefing" | "followup" | "registration" | "memo";
-  occurredAt: string;
-  nextActionDate: string | null;
-  note: string;
-}
-
 export interface Goal {
   workspaceId: string;
   targetTitle: TitleCode;
@@ -186,14 +159,13 @@ export interface BonusBreakdown {
 export interface Mission {
   id: string;
   priority: number;
-  category: "followup" | "title" | "schedule" | "data";
+  category: "title" | "data";
   title: string;
   reason: string;
   dueDate: string | null;
 }
 
 export interface SimulationRequest {
-  prospectId?: string;
   candidateName: string;
   course: CourseCode;
   period: string;
