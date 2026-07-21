@@ -7,6 +7,7 @@ import type {
   PlacementResult,
   ProductRule,
   PurchaseEvent,
+  SavedForecast,
   SimulationMember,
   SimulationOrganization,
   SimulationRequest,
@@ -43,6 +44,9 @@ export const api = {
   saveTax: (profile: TaxProfile) => request<TaxProfile>("/api/v1/settings/tax", { method: "PUT", body: JSON.stringify(profile) }),
   simulate: (payload: SimulationRequest) => request<{ results: PlacementResult[] }>("/api/v1/simulations", { method: "POST", body: JSON.stringify(payload) }),
   forecast: (payload: { period: string; rootMemberId: string; scenarios: ForecastScenario[] }) => request<{ results: ForecastResult[] }>("/api/v1/forecasts", { method: "POST", body: JSON.stringify(payload) }),
+  savedForecasts: () => request<SavedForecast[]>("/api/v1/forecasts/saved"),
+  saveForecast: (payload: { name: string; period: string; rootMemberId: string; scenarios: ForecastScenario[] }) => request<SavedForecast>("/api/v1/forecasts/saved", { method: "POST", body: JSON.stringify(payload) }),
+  deleteForecast: (id: string) => request<{ deleted: number }>(`/api/v1/forecasts/saved/${encodeURIComponent(id)}`, { method: "DELETE" }),
   previewImport: (kind: "members" | "purchases", csv: string) => request<{ headers: string[]; rows: Array<Record<string, string>>; errors: Array<{ row: number; field: string; message: string }> }>("/api/v1/imports/preview", { method: "POST", body: JSON.stringify({ kind, csv }) }),
   commitImport: (kind: "members" | "purchases", csv: string) => request<{ imported: number }>("/api/v1/imports/commit", { method: "POST", body: JSON.stringify({ kind, csv }) })
 };

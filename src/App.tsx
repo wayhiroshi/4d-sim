@@ -11,6 +11,7 @@ import {
   type Member,
   type OrganizationSnapshot,
   type PlacementResult,
+  type SavedForecast,
   type TaxProfile,
   type TrainerBonusRole,
   type TitleChecklistItem,
@@ -26,6 +27,18 @@ const TRAINER_ROLE_OPTIONS: Array<{ value: "" | TrainerBonusRole; label: string 
   { value: "ST_SOLO", label: "自分がSトレーナーとして単独担当" },
   { value: "ST_WITH_PT", label: "自分がSトレーナーとしてPトレと同時担当" }
 ];
+type ForecastScenarioId = ForecastScenario["id"];
+type ForecastSetting = {
+  direct: number; retention: number; course: CourseCode; placement: string; additionalPv: number;
+  teamActivity: number; introductionsPerActiveMember: number; maxTeamRegistrations: number;
+};
+const FORECAST_IDS: ForecastScenarioId[] = ["conservative", "standard", "challenge"];
+const FORECAST_LABELS: Record<ForecastScenarioId, string> = { conservative: "想定より悪い", standard: "現実ライン", challenge: "目標ライン" };
+const DEFAULT_FORECAST_SETTINGS: Record<ForecastScenarioId, ForecastSetting> = {
+  conservative: { direct: 0, retention: 75, course: "A", placement: "root", additionalPv: 0, teamActivity: 0, introductionsPerActiveMember: 0, maxTeamRegistrations: 0 },
+  standard: { direct: 1, retention: 85, course: "A", placement: "root", additionalPv: 0, teamActivity: 10, introductionsPerActiveMember: 0.5, maxTeamRegistrations: 5 },
+  challenge: { direct: 2, retention: 95, course: "G", placement: "root", additionalPv: 0, teamActivity: 25, introductionsPerActiveMember: 1, maxTeamRegistrations: 15 }
+};
 
 function useLoad<T>(loader: () => Promise<T>, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
@@ -232,16 +245,73 @@ function BonusBreakdownDetails({ result }: { result: PlacementResult }) {
 }
 
 function Forecast() {
-  const tree = useLoad(api.tree, []); const tax = useLoad(api.tax, []);
-  const [horizon, setHorizon] = useState(3); const [count, setCount] = useState({ conservative: 0, standard: 1, challenge: 2 }); const [retention, setRetention] = useState({ conservative: 80, standard: 90, challenge: 100 }); const [results, setResults] = useState<ForecastResult[]>([]); const [busy, setBusy] = useState(false);
-  const [course, setCourse] = useState<Record<"conservative" | "standard" | "challenge", CourseCode>>({ conservative: "A", standard: "A", challenge: "G" });
-  const [placement, setPlacement] = useState({ conservative: "root", standard: "root", challenge: "root" });
-  const [additionalPv, setAdditionalPv] = useState({ conservative: 0, standard: 0, challenge: 0 });
+  const tree = useLoad(api.tree, []); const tax = useLoad(api.tax, []); const saved = useLoad(api.savedForecasts, []);
+  const [horizon, setHorizon] = useState(3); const [settings, setSettings] = useState(DEFAULT_FORECAST_SETTINGS);
+  const [results, setResults] = useState<ForecastResult[]>([]); const [busy, setBusy] = useState(false);
+  const [saveName, setSaveName] = useState(""); const [message, setMessage] = useState<string | null>(null); const [error, setError] = useState<string | null>(null);
   const availableMembers = tree.data?.members.filter((member) => member.endedPeriod === null) ?? [];
-  const run = async () => { if (!tree.data || !tax.data) return; const root = tree.data.members.find((member) => member.parentMemberId === null); if (!root) return; const ids = ["conservative", "standard", "challenge"] as const; const scenarios: ForecastScenario[] = ids.map((id) => ({ id, label: id === "conservative" ? "保守" : id === "standard" ? "標準" : "挑戦", taxProfile: tax.data ?? DEFAULT_TAX, months: Array.from({ length: horizon }, (_, index) => { const [year, month] = tree.data!.period.split("-").map(Number); const date = new Date(Date.UTC(year!, month! - 1 + index + 1, 1)); const period = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2,"0")}`; return { period, registrations: [{ course: course[id], placementMemberId: placement[id], count: count[id] }], continuationRate: retention[id] / 100, additionalPv: additionalPv[id] }; }) })); setBusy(true); try { setResults((await api.forecast({ period: tree.data.period, rootMemberId: root.id, scenarios })).results); } finally { setBusy(false); } };
-  return <PageState loading={tree.loading || tax.loading} error={tree.error || tax.error}>{tree.data && <><PageHeading kicker="FUTURE MAP" title="条件付き将来予測" description="入力した前提が実現した場合の試算です" />
-    <section className="panel forecast-controls"><div className="segment">{[[3,"3か月"],[6,"6か月"],[12,"1年"]].map(([value,label]) => <button key={value} className={horizon === value ? "active" : ""} onClick={() => setHorizon(Number(value))}>{label}</button>)}</div><p className="input-note">各シナリオの毎月共通前提を明示します。</p><div className="scenario-inputs">{(["conservative","standard","challenge"] as const).map((id) => <div key={id}><h3>{id === "conservative" ? "保守" : id === "standard" ? "標準" : "挑戦"}</h3><label>毎月の新規人数<input type="number" min="0" max="50" value={count[id]} onChange={(event) => setCount((current) => ({ ...current, [id]: Number(event.target.value) }))} /></label><label>継続率<input type="number" min="0" max="100" value={retention[id]} onChange={(event) => setRetention((current) => ({ ...current, [id]: Number(event.target.value) }))} />%</label><label>コース<select value={course[id]} onChange={(event) => setCourse((current) => ({ ...current, [id]: event.target.value as CourseCode }))}>{COURSES.map((item) => <option key={item}>{item}</option>)}</select></label><label>配置先<select value={placement[id]} onChange={(event) => setPlacement((current) => ({ ...current, [id]: event.target.value }))}>{availableMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label><label className="wide-input">毎月の本人追加p.v.<input type="number" min="0" value={additionalPv[id]} onChange={(event) => setAdditionalPv((current) => ({ ...current, [id]: Number(event.target.value) }))} /></label></div>)}</div><button className="primary-button" onClick={() => void run()} disabled={busy}>{busy ? "計算中…" : "3シナリオを計算"}</button></section>
-    <div className="forecast-grid">{results.map((result) => <article className="panel" key={result.scenarioId}><h2>{result.scenarioId === "conservative" ? "保守" : result.scenarioId === "standard" ? "標準" : "挑戦"}</h2>{result.months.map((month) => <div className="forecast-row" key={month.period}><div><strong>{month.period}</strong><small>{month.title} · {month.groupMembers}人</small></div><div><strong>{number.format(month.groupPv)} p.v.</strong><small>{yen.format(month.gross)}</small></div></div>)}</article>)}</div><p className="disclaimer">将来の登録・継続・報酬を保証するものではありません。入力した仮定を明記した条件付き試算です。</p>
+  const updateSetting = <K extends keyof ForecastSetting>(id: ForecastScenarioId, key: K, value: ForecastSetting[K]) => setSettings((current) => ({ ...current, [id]: { ...current[id], [key]: value } }));
+  const buildScenarios = (): ForecastScenario[] => {
+    if (!tree.data || !tax.data) return [];
+    return FORECAST_IDS.map((id) => ({
+      id, label: FORECAST_LABELS[id], taxProfile: tax.data ?? DEFAULT_TAX,
+      months: Array.from({ length: horizon }, (_, index) => {
+        const [year, month] = tree.data!.period.split("-").map(Number);
+        const date = new Date(Date.UTC(year!, month! - 1 + index + 1, 1));
+        const period = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2,"0")}`;
+        const setting = settings[id];
+        return {
+          period, registrations: [{ course: setting.course, placementMemberId: setting.placement, count: setting.direct }],
+          continuationRate: setting.retention / 100, additionalPv: setting.additionalPv,
+          teamActivityRate: setting.teamActivity / 100, introductionsPerActiveMember: setting.introductionsPerActiveMember,
+          maxTeamRegistrations: setting.maxTeamRegistrations
+        };
+      })
+    }));
+  };
+  const run = async () => {
+    if (!tree.data) return; const root = tree.data.members.find((member) => member.parentMemberId === null); if (!root) return;
+    setBusy(true); setError(null); setMessage(null);
+    try { setResults((await api.forecast({ period: tree.data.period, rootMemberId: root.id, scenarios: buildScenarios() })).results); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "試算できませんでした"); }
+    finally { setBusy(false); }
+  };
+  const saveForecast = async () => {
+    if (!tree.data || !results.length) return; const root = tree.data.members.find((member) => member.parentMemberId === null); if (!root) return;
+    setBusy(true); setError(null);
+    try {
+      const name = saveName.trim() || `${tree.data.period}から${horizon}か月`;
+      await api.saveForecast({ name, period: tree.data.period, rootMemberId: root.id, scenarios: buildScenarios() });
+      setMessage(`「${name}」を保存しました`); setSaveName(""); saved.reload();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "保存できませんでした"); }
+    finally { setBusy(false); }
+  };
+  const loadForecast = (forecast: SavedForecast) => {
+    const next = { ...DEFAULT_FORECAST_SETTINGS };
+    for (const scenario of forecast.scenarios) {
+      const month = scenario.months[0]; if (!month) continue; const registration = month.registrations[0];
+      next[scenario.id] = {
+        direct: registration?.count ?? 0, retention: Math.round(month.continuationRate * 100), course: registration?.course ?? "A",
+        placement: registration?.placementMemberId ?? "root", additionalPv: month.additionalPv,
+        teamActivity: Math.round(month.teamActivityRate * 100), introductionsPerActiveMember: month.introductionsPerActiveMember,
+        maxTeamRegistrations: month.maxTeamRegistrations
+      };
+    }
+    setSettings(next); setHorizon(forecast.scenarios[0]?.months.length ?? 3); setResults(forecast.results); setMessage(`「${forecast.name}」を表示しています`); window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const removeForecast = async (forecast: SavedForecast) => {
+    if (!window.confirm(`「${forecast.name}」を削除しますか？`)) return;
+    try { await api.deleteForecast(forecast.id); setMessage(`「${forecast.name}」を削除しました`); saved.reload(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "削除できませんでした"); }
+  };
+  const endValues = results.map((result) => result.months.at(-1)).filter((month): month is NonNullable<typeof month> => Boolean(month));
+  const maxMembers = Math.max(...endValues.map((month) => month.groupMembers), 1);
+  return <PageState loading={tree.loading || tax.loading || saved.loading} error={tree.error || tax.error || saved.error}>{tree.data && <><PageHeading kicker="FUTURE MAP" title="条件付き将来試算" description="悪い場合・現実ライン・目標ラインを同じ前提項目で比較します" />
+    <section className="forecast-guidance"><strong>夢の数字にしないための見方</strong><p>「本人が紹介する人数」と「チームから生まれる人数」を分けています。チーム新規は、今月継続しているメンバーが翌月以降に紹介を増やす前提で計算します。</p></section>
+    <section className="panel forecast-controls"><div className="segment">{[[3,"3か月"],[6,"6か月"],[12,"1年"]].map(([value,label]) => <button type="button" key={value} className={horizon === value ? "active" : ""} onClick={() => setHorizon(Number(value))}>{label}</button>)}</div><p className="input-note">各欄は毎月共通の前提です。月ごとの実績とずれたら保存案を更新せず、新しい案として残せます。</p><div className="scenario-inputs">{FORECAST_IDS.map((id) => { const setting = settings[id]; return <div className={`scenario-${id}`} key={id}><h3>{FORECAST_LABELS[id]}</h3><p>{id === "conservative" ? "想定どおり進まなかった場合" : id === "standard" ? "無理なく継続できる中心計画" : "達成したい上振れ目標"}</p><label>自分の紹介／月<input type="number" min="0" max="50" value={setting.direct} onChange={(event) => updateSetting(id, "direct", Number(event.target.value))} /></label><label>継続率<input type="number" min="0" max="100" value={setting.retention} onChange={(event) => updateSetting(id, "retention", Number(event.target.value))} />%</label><label>チーム活動率<input type="number" min="0" max="100" value={setting.teamActivity} onChange={(event) => updateSetting(id, "teamActivity", Number(event.target.value))} /><small className="field-note">継続者のうち紹介活動する割合</small></label><label>活動者1人の紹介数<input type="number" min="0" max="3" step="0.1" value={setting.introductionsPerActiveMember} onChange={(event) => updateSetting(id, "introductionsPerActiveMember", Number(event.target.value))} /></label><label>チーム新規の月上限<input type="number" min="0" max="50" value={setting.maxTeamRegistrations} onChange={(event) => updateSetting(id, "maxTeamRegistrations", Number(event.target.value))} /><small className="field-note">急な指数増加を抑える安全弁</small></label><label>コース<select value={setting.course} onChange={(event) => updateSetting(id, "course", event.target.value as CourseCode)}>{COURSES.map((item) => <option key={item}>{item}</option>)}</select></label><label>自分紹介の配置先<select value={setting.placement} onChange={(event) => updateSetting(id, "placement", event.target.value)}>{availableMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label><label>本人追加p.v.／月<input type="number" min="0" value={setting.additionalPv} onChange={(event) => updateSetting(id, "additionalPv", Number(event.target.value))} /></label></div>; })}</div><button className="primary-button forecast-run" onClick={() => void run()} disabled={busy}>{busy ? "計算中…" : "3シナリオを比較"}</button></section>
+    {error && <div className="state-card error">{error}</div>}{message && <p className="status-message">{message}</p>}
+    {results.length > 0 && <><section className="panel forecast-comparison"><div className="panel-title"><h2>最終月の比較</h2><span className="status-chip">この前提なら</span></div>{results.map((result) => { const final = result.months.at(-1); if (!final) return null; const label = result.assumptionLoad === "low" ? "前提負荷 低" : result.assumptionLoad === "medium" ? "前提負荷 中" : "前提負荷 高"; return <div className="comparison-row" key={result.scenarioId}><div><strong>{FORECAST_LABELS[result.scenarioId]}</strong><small className={`assumption-${result.assumptionLoad}`}>{label}</small></div><div className="comparison-bar"><span style={{ width: `${Math.max(6, final.groupMembers / maxMembers * 100)}%` }} /></div><div><strong>{final.groupMembers}人・{final.title}</strong><small>{yen.format(final.gross)}／月</small></div></div>; })}</section><div className="forecast-grid">{results.map((result) => <article className={`panel forecast-result scenario-${result.scenarioId}`} key={result.scenarioId}><div className="forecast-result-heading"><div><h2>{FORECAST_LABELS[result.scenarioId]}</h2><span className={`assumption-${result.assumptionLoad}`}>前提負荷 {result.assumptionLoad === "low" ? "低" : result.assumptionLoad === "medium" ? "中" : "高"}</span></div><details><summary>前提の確認</summary>{result.assumptionNotes.map((note) => <p key={note}>{note}</p>)}</details></div>{result.months.map((month) => <div className="forecast-row" key={month.period}><div><strong>{month.period}</strong><small>{month.title} · 組織{month.groupMembers}人 · 継続{month.retainedMembers}人</small><small>新規：本人{month.directRegistrations}人＋チーム{month.teamRegistrations}人</small></div><div><strong>{number.format(month.groupPv)} p.v.</strong><small>総ボーナス {yen.format(month.gross)}</small><small>概算振込 {yen.format(month.estimatedNet)}</small></div></div>)}</article>)}</div><section className="panel forecast-save"><div><h2>この3案を保存</h2><p>入力前提と計算結果をセットで残します。</p></div><label>保存名<input maxLength={80} value={saveName} onChange={(event) => setSaveName(event.target.value)} placeholder={`${tree.data.period}から${horizon}か月`} /></label><button className="primary-button" disabled={busy} onClick={() => void saveForecast()}>保存する</button></section></>}
+    <section className="panel saved-forecasts"><div className="panel-title"><h2>保存した将来試算</h2><span>{saved.data?.length ?? 0}件</span></div>{saved.data?.length ? saved.data.map((forecast) => <div className="saved-forecast-row" key={forecast.id}><button className="saved-forecast-open" onClick={() => loadForecast(forecast)}><strong>{forecast.name}</strong><small>{forecast.basePeriod}から{forecast.scenarios[0]?.months.length ?? 0}か月 · {new Date(forecast.updatedAt).toLocaleDateString("ja-JP")}</small></button><button className="text-button danger-text" onClick={() => void removeForecast(forecast)}>削除</button></div>) : <p className="muted">保存した試算はまだありません。</p>}</section><p className="disclaimer">これは入力した仮定に基づく条件付き試算です。将来の登録、継続、タイトル、報酬を保証しません。目標ラインだけでなく「想定より悪い」結果も行動計画に使ってください。</p>
   </>}</PageState>;
 }
 

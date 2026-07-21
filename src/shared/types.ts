@@ -252,6 +252,9 @@ export interface ForecastMonthlyInput {
   registrations: Array<{ course: CourseCode; placementMemberId: string; count: number }>;
   continuationRate: number;
   additionalPv: number;
+  teamActivityRate: number;
+  introductionsPerActiveMember: number;
+  maxTeamRegistrations: number;
 }
 
 export interface ForecastScenario {
@@ -263,6 +266,8 @@ export interface ForecastScenario {
 
 export interface ForecastResult {
   scenarioId: ForecastScenario["id"];
+  assumptionLoad: "low" | "medium" | "high";
+  assumptionNotes: string[];
   months: Array<{
     period: string;
     groupMembers: number;
@@ -270,7 +275,22 @@ export interface ForecastResult {
     title: TitleCode;
     gross: number;
     estimatedNet: number;
+    directRegistrations: number;
+    teamRegistrations: number;
+    retainedMembers: number;
   }>;
+}
+
+export interface SavedForecast {
+  id: string;
+  workspaceId: string;
+  name: string;
+  basePeriod: string;
+  rootMemberId: string;
+  scenarios: ForecastScenario[];
+  results: ForecastResult[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface DashboardData {

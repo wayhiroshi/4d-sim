@@ -3,6 +3,7 @@ import type {
   Member,
   OrganizationSnapshot,
   PurchaseEvent,
+  SavedForecast,
   SimulationMember,
   TaxProfile
 } from "../src/shared/types";
@@ -51,6 +52,18 @@ interface SimulationMemberRow {
   created_at: string;
 }
 
+interface SavedForecastRow {
+  id: string;
+  workspace_id: string;
+  name: string;
+  base_period: string;
+  root_member_id: string;
+  scenarios_json: string;
+  results_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
 const mapMember = (row: MemberRow): Member => ({
   id: row.id,
   workspaceId: row.workspace_id,
@@ -95,11 +108,45 @@ const mapSimulationMember = (row: SimulationMemberRow): SimulationMember => ({
   createdAt: row.created_at
 });
 
+const mapSavedForecast = (row: SavedForecastRow): SavedForecast => ({
+  id: row.id,
+  workspaceId: row.workspace_id,
+  name: row.name,
+  basePeriod: row.base_period,
+  rootMemberId: row.root_member_id,
+  scenarios: JSON.parse(row.scenarios_json) as SavedForecast["scenarios"],
+  results: JSON.parse(row.results_json) as SavedForecast["results"],
+  createdAt: row.created_at,
+  updatedAt: row.updated_at
+});
+
 export async function listSimulationMembers(db: D1Database, workspaceId: string, period: string): Promise<SimulationMember[]> {
   const rows = await db.prepare(
     "SELECT * FROM simulation_members WHERE workspace_id = ? AND period = ? ORDER BY created_at, id"
   ).bind(workspaceId, period).all<SimulationMemberRow>();
   return rows.results.map(mapSimulationMember);
+}
+
+export async function listSavedForecasts(db: D1Database, workspaceId: string): Promise<SavedForecast[]> {
+  const rows = await db.prepare(
+    "SELECT * FROM saved_forecasts WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC"
+  ).bind(workspaceId).all<SavedForecastRow>();
+  return rows.results.map(mapSavedForecast);
+}
+
+export async function insertSavedForecast(db: D1Database, forecast: SavedForecast): Promise<void> {
+  await db.prepare(
+    "INSERT INTO saved_forecasts (id, workspace_id, name, base_period, root_member_id, scenarios_json, results_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).bind(
+    forecast.id, forecast.workspaceId, forecast.name, forecast.basePeriod, forecast.rootMemberId,
+    JSON.stringify(forecast.scenarios), JSON.stringify(forecast.results), forecast.createdAt, forecast.updatedAt
+  ).run();
+}
+
+export async function deleteSavedForecast(db: D1Database, workspaceId: string, id: string): Promise<number> {
+  const result = await db.prepare("DELETE FROM saved_forecasts WHERE workspace_id = ? AND id = ?")
+    .bind(workspaceId, id).run();
+  return result.meta.changes;
 }
 
 export const simulationMemberInsert = (db: D1Database, member: SimulationMember): D1PreparedStatement => db.prepare(

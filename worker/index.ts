@@ -20,6 +20,7 @@ import {
   type Goal,
   type Member,
   type PurchaseEvent,
+  type SavedForecast,
   type SimulationMember,
   type SimulationOrganization,
   type TitleChecklistData,
@@ -27,6 +28,9 @@ import {
 import {
   getGoal,
   getTaxProfile,
+  deleteSavedForecast,
+  insertSavedForecast,
+  listSavedForecasts,
   listSimulationMembers,
   loadSnapshot,
   memberInsert,
@@ -103,12 +107,9 @@ const simulationMemberSchema = z.object({
   trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null)
 });
 
-const forecastSchema = z.object({
-  period: periodSchema,
-  rootMemberId: z.string().min(1),
-  scenarios: z.array(z.object({
+const forecastScenarioSchema = z.object({
     id: z.enum(["conservative", "standard", "challenge"]),
-    label: z.string().min(1),
+    label: z.string().trim().min(1).max(40),
     months: z.array(z.object({
       period: periodSchema,
       registrations: z.array(z.object({
@@ -117,11 +118,29 @@ const forecastSchema = z.object({
         count: z.number().int().min(0).max(50)
       })),
       continuationRate: z.number().min(0).max(1),
-      additionalPv: z.number().int().nonnegative()
+      additionalPv: z.number().int().min(0).max(10_000_000),
+      teamActivityRate: z.number().min(0).max(1),
+      introductionsPerActiveMember: z.number().min(0).max(3),
+      maxTeamRegistrations: z.number().int().min(0).max(50)
     })).min(1).max(12),
     taxProfile: taxProfileSchema
-  })).length(3)
 });
+
+const forecastSchema = z.object({
+  period: periodSchema,
+  rootMemberId: z.string().min(1),
+  scenarios: z.array(forecastScenarioSchema).length(3).superRefine((scenarios, context) => {
+    if (new Set(scenarios.map((scenario) => scenario.id)).size !== scenarios.length) {
+      context.addIssue({ code: "custom", message: "3つのシナリオIDは重複できません" });
+    }
+  })
+});
+
+function invalidForecastPlacement(memberIds: Set<string>, scenarios: z.infer<typeof forecastScenarioSchema>[]): boolean {
+  return scenarios.some((scenario) => scenario.months.some((month) =>
+    month.registrations.some((registration) => !memberIds.has(registration.placementMemberId))
+  ));
+}
 
 async function boundedJson<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
   const length = Number(request.headers.get("content-length") ?? "0");
@@ -337,7 +356,41 @@ app.post("/api/v1/simulations", async (context) => {
 app.post("/api/v1/forecasts", async (context) => {
   const input = await boundedJson(context.req.raw, forecastSchema);
   const snapshot = await loadSnapshot(context.env.DB, context.get("workspaceId"), input.period);
+  const memberIds = new Set(snapshot.members.map((member) => member.id));
+  if (!memberIds.has(input.rootMemberId) || invalidForecastPlacement(memberIds, input.scenarios)) {
+    return context.json({ error: "試算の起点または配置先が現在の組織に存在しません" }, 400);
+  }
   return context.json({ results: input.scenarios.map((scenario) => runForecast(snapshot, input.rootMemberId, scenario)) });
+});
+
+app.get("/api/v1/forecasts/saved", async (context) => {
+  return context.json(await listSavedForecasts(context.env.DB, context.get("workspaceId")));
+});
+
+app.post("/api/v1/forecasts/saved", async (context) => {
+  const input = await boundedJson(context.req.raw, forecastSchema.extend({ name: z.string().trim().min(1).max(80) }));
+  const workspaceId = context.get("workspaceId");
+  const snapshot = await loadSnapshot(context.env.DB, workspaceId, input.period);
+  const memberIds = new Set(snapshot.members.map((member) => member.id));
+  if (!memberIds.has(input.rootMemberId) || invalidForecastPlacement(memberIds, input.scenarios)) {
+    return context.json({ error: "試算の起点または配置先が現在の組織に存在しません" }, 400);
+  }
+  const now = new Date().toISOString();
+  const forecast: SavedForecast = {
+    id: crypto.randomUUID(), workspaceId, name: input.name, basePeriod: input.period,
+    rootMemberId: input.rootMemberId, scenarios: input.scenarios,
+    results: input.scenarios.map((scenario) => runForecast(snapshot, input.rootMemberId, scenario)),
+    createdAt: now, updatedAt: now
+  };
+  await insertSavedForecast(context.env.DB, forecast);
+  return context.json(forecast, 201);
+});
+
+app.delete("/api/v1/forecasts/saved/:id", async (context) => {
+  const id = z.string().uuid().parse(context.req.param("id"));
+  const deleted = await deleteSavedForecast(context.env.DB, context.get("workspaceId"), id);
+  if (!deleted) return context.json({ error: "保存した試算が見つかりません" }, 404);
+  return context.json({ deleted });
 });
 
 app.get("/api/v1/imports/template/:kind", (context) => {

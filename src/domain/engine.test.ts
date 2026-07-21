@@ -8,9 +8,10 @@ import {
   generateMissions,
   groupPv,
   periodForDate,
+  runForecast,
   simulatePlacements
 } from "./engine";
-import type { CourseCode, Member, OrganizationSnapshot, PurchaseEvent, SimulationMember, TaxProfile } from "../shared/types";
+import type { CourseCode, ForecastScenario, Member, OrganizationSnapshot, PurchaseEvent, SimulationMember, TaxProfile } from "../shared/types";
 
 const period = "2026-07";
 const tax: TaxProfile = { invoiceRegistered: true, withholdingRate: 0, transferFee: 0, offsets: 0, priorCarryover: 0 };
@@ -277,5 +278,44 @@ describe("simulation checks", () => {
     const director = evaluateTitleChecklists(snapshot([root], [purchase("root", "root", 5330)]), "root").find((title) => title.code === "DR");
     expect(director?.alternatives).toBeUndefined();
     expect(director?.conditions.some((condition) => condition.key === "director-maintenance")).toBe(true);
+  });
+});
+
+describe("conditional forecast", () => {
+  it("lets retained team members introduce the next generation without mutating the source", () => {
+    const data = snapshot(
+      [member("root", null, "G"), member("child", "root")],
+      [purchase("root", "root", 10670), purchase("child", "child", 5330)]
+    );
+    const original = structuredClone(data);
+    const scenario: ForecastScenario = {
+      id: "standard", label: "現実ライン", taxProfile: tax,
+      months: ["2026-08", "2026-09"].map((targetPeriod) => ({
+        period: targetPeriod,
+        registrations: [{ course: "A", placementMemberId: "root", count: 0 }],
+        continuationRate: 1, additionalPv: 0, teamActivityRate: 1,
+        introductionsPerActiveMember: 1, maxTeamRegistrations: 10
+      }))
+    };
+    const result = runForecast(data, "root", scenario);
+    expect(result.months.map((month) => month.teamRegistrations)).toEqual([1, 2]);
+    expect(result.months.at(-1)).toMatchObject({ groupMembers: 4, directRegistrations: 0, retainedMembers: 4 });
+    expect(result.assumptionLoad).toBe("high");
+    expect(data).toEqual(original);
+  });
+
+  it("caps team growth and carries only sub-person fractions", () => {
+    const members = [member("root", null, "G"), ...Array.from({ length: 6 }, (_, index) => member(`m${index}`, "root"))];
+    const scenario: ForecastScenario = {
+      id: "challenge", label: "目標ライン", taxProfile: tax,
+      months: ["2026-08", "2026-09"].map((targetPeriod) => ({
+        period: targetPeriod,
+        registrations: [{ course: "A", placementMemberId: "root", count: 0 }],
+        continuationRate: 1, additionalPv: 0, teamActivityRate: 1,
+        introductionsPerActiveMember: 1, maxTeamRegistrations: 2
+      }))
+    };
+    const result = runForecast(snapshot(members, members.map((item) => purchase(`p-${item.id}`, item.id, 5330))), "root", scenario);
+    expect(result.months.map((month) => month.teamRegistrations)).toEqual([2, 2]);
   });
 });

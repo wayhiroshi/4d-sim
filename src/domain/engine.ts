@@ -625,6 +625,26 @@ export function generateMissions(title: TitleEvaluation): Mission[] {
   return missions;
 }
 
+function assessForecastAssumptions(scenario: ForecastScenario): Pick<ForecastResult, "assumptionLoad" | "assumptionNotes"> {
+  const directPerMonth = Math.max(...scenario.months.flatMap((month) => month.registrations.map((item) => item.count)), 0);
+  const teamGrowthRate = Math.max(...scenario.months.map((month) => month.teamActivityRate * month.introductionsPerActiveMember), 0);
+  const continuationRate = Math.max(...scenario.months.map((month) => month.continuationRate), 0);
+  const high = directPerMonth >= 4 || teamGrowthRate >= 0.25 || (continuationRate >= 0.98 && scenario.months.length >= 6);
+  const medium = directPerMonth >= 2 || teamGrowthRate >= 0.1 || continuationRate >= 0.9;
+  const assumptionLoad: ForecastResult["assumptionLoad"] = high ? "high" : medium ? "medium" : "low";
+  const assumptionNotes = [
+    `本人紹介は最大で毎月${directPerMonth}人の前提です`,
+    teamGrowthRate > 0
+      ? `チーム新規は活動率×1人あたり紹介数（最大月${Math.round(teamGrowthRate * 100)}%相当）で増えます`
+      : "チーム内からの新規紹介は0人の前提です",
+    `継続率は最大${Math.round(continuationRate * 100)}%の前提です`
+  ];
+  if (high) assumptionNotes.push("複数の高い前提が連続するため、目標として扱い月ごとに実績との差を見直してください");
+  else if (medium) assumptionNotes.push("努力を要する前提を含みます。直近実績と毎月照合してください");
+  else assumptionNotes.push("控えめな前提ですが、結果を保証するものではありません");
+  return { assumptionLoad, assumptionNotes };
+}
+
 export function runForecast(
   initial: OrganizationSnapshot,
   rootId: string,
@@ -636,10 +656,14 @@ export function runForecast(
     purchases: initial.purchases.map((purchase) => ({ ...purchase }))
   };
   const months: ForecastResult["months"] = [];
+  let teamRecruitmentCarry = 0;
   for (const month of scenario.months) {
-    const activeMembers = snapshot.members.filter((member) => member.endedPeriod === null);
-    const keepCount = Math.max(0, Math.round(activeMembers.length * month.continuationRate));
-    const retainedIds = new Set(activeMembers.slice(0, keepCount).map((member) => member.id));
+    const activeMembers = snapshot.members.filter((member) => member.endedPeriod === null).sort((a, b) => a.id.localeCompare(b.id));
+    const root = activeMembers.find((member) => member.id === rootId);
+    const teamMembers = activeMembers.filter((member) => member.id !== rootId);
+    const keepTeamCount = Math.max(0, Math.round(teamMembers.length * month.continuationRate));
+    const retainedIds = new Set(teamMembers.slice(0, keepTeamCount).map((member) => member.id));
+    if (root) retainedIds.add(root.id);
     const repeats: PurchaseEvent[] = activeMembers.filter((member) => retainedIds.has(member.id)).map((member) => ({
       id: `forecast-repeat-${scenario.id}-${month.period}-${member.id}`,
       workspaceId: snapshot.workspaceId,
@@ -654,11 +678,13 @@ export function runForecast(
     }));
     const additions: Member[] = [];
     const initialPurchases: PurchaseEvent[] = [];
+    let directRegistrations = 0;
     month.registrations.forEach((registration, registrationIndex) => {
       for (let index = 0; index < registration.count; index += 1) {
         const id = `forecast-${scenario.id}-${month.period}-${registrationIndex}-${index}`;
+        directRegistrations += 1;
         additions.push({
-          id, workspaceId: snapshot.workspaceId, displayName: `新規${index + 1}`, parentMemberId: registration.placementMemberId,
+          id, workspaceId: snapshot.workspaceId, displayName: `本人紹介${index + 1}`, parentMemberId: registration.placementMemberId,
           introducerMemberId: rootId, masterMemberId: null, trainerMemberId: null, idKind: "master", course: registration.course,
           title: "NONE", trainerCredential: "NONE", sponsorLicense: false, directorPromotedPeriod: null,
           joinedPeriod: month.period, endedPeriod: null
@@ -670,6 +696,41 @@ export function runForecast(
         initialPurchases.push(firstPurchase, { ...firstPurchase, id: `repeat-${id}`, kind: "repeat" });
       }
     });
+
+    const rawTeamRegistrations = keepTeamCount * month.teamActivityRate * month.introductionsPerActiveMember + teamRecruitmentCarry;
+    const requestedTeamRegistrations = Math.min(Math.floor(rawTeamRegistrations), month.maxTeamRegistrations);
+    teamRecruitmentCarry = rawTeamRegistrations < month.maxTeamRegistrations ? rawTeamRegistrations - Math.floor(rawTeamRegistrations) : 0;
+    const childCounts = new Map<string, number>();
+    for (const member of snapshot.members) {
+      if (member.parentMemberId) childCounts.set(member.parentMemberId, (childCounts.get(member.parentMemberId) ?? 0) + 1);
+    }
+    for (const member of additions) {
+      if (member.parentMemberId) childCounts.set(member.parentMemberId, (childCounts.get(member.parentMemberId) ?? 0) + 1);
+    }
+    const teamParents = teamMembers.filter((member) => retainedIds.has(member.id));
+    const teamCourse = month.registrations[0]?.course ?? "A";
+    let teamRegistrations = 0;
+    for (let index = 0; index < requestedTeamRegistrations; index += 1) {
+      const parent = teamParents.length > 0
+        ? Array.from({ length: teamParents.length }, (_, offset) => teamParents[(index + offset) % teamParents.length])
+            .find((member) => member && (childCounts.get(member.id) ?? 0) < planConfig.firstLineLimit)
+        : undefined;
+      if (!parent) break;
+      const id = `forecast-team-${scenario.id}-${month.period}-${index}`;
+      childCounts.set(parent.id, (childCounts.get(parent.id) ?? 0) + 1);
+      teamRegistrations += 1;
+      additions.push({
+        id, workspaceId: snapshot.workspaceId, displayName: `チーム紹介${index + 1}`, parentMemberId: parent.id,
+        introducerMemberId: parent.id, masterMemberId: null, trainerMemberId: null, idKind: "master", course: teamCourse,
+        title: "NONE", trainerCredential: "NONE", sponsorLicense: false, directorPromotedPeriod: null,
+        joinedPeriod: month.period, endedPeriod: null
+      });
+      const firstPurchase: PurchaseEvent = {
+        id: `purchase-${id}`, workspaceId: snapshot.workspaceId, memberId: id, period: month.period, productCode: null,
+        kind: "initial", status: "confirmed", quantity: 1, price: 0, pv: planConfig.courses[teamCourse].recurringPv
+      };
+      initialPurchases.push(firstPurchase, { ...firstPurchase, id: `repeat-${id}`, kind: "repeat" });
+    }
     const additional: PurchaseEvent[] = month.additionalPv > 0 ? [{
       id: `forecast-additional-${scenario.id}-${month.period}`, workspaceId: snapshot.workspaceId, memberId: rootId,
       period: month.period, productCode: null, kind: "additional", status: "confirmed", quantity: 1, price: 0, pv: month.additionalPv
@@ -688,8 +749,11 @@ export function runForecast(
       groupPv: groupPv(snapshot, rootId),
       title,
       gross: bonus.gross,
-      estimatedNet: bonus.estimatedNet
+      estimatedNet: bonus.estimatedNet,
+      directRegistrations,
+      teamRegistrations,
+      retainedMembers: Math.max(0, retainedIds.size - (retainedIds.has(rootId) ? 1 : 0)) + additions.length
     });
   }
-  return { scenarioId: scenario.id, months };
+  return { scenarioId: scenario.id, ...assessForecastAssumptions(scenario), months };
 }
