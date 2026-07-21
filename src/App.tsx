@@ -117,34 +117,77 @@ function Metric({ label, value, accent = false }: { label: string; value: string
 }
 
 function Organization() {
-  const { data, error, loading } = useLoad(api.tree, []);
+  const { data, error, loading, reload } = useLoad(api.simulationOrganization, []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = data?.members.find((member) => member.id === selectedId) ?? data?.members[0] ?? null;
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const snapshot = data?.snapshot ?? null;
+  const trialIds = useMemo(() => new Set(data?.simulationMembers.map((member) => member.id) ?? []), [data]);
+  const selected = snapshot?.members.find((member) => member.id === selectedId) ?? snapshot?.members[0] ?? null;
+  const addTrial = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!snapshot) return;
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    setBusy(true); setMessage(null);
+    try {
+      await api.createSimulationMember({
+        displayName: String(values.get("name")),
+        course: String(values.get("course")) as CourseCode,
+        parentMemberId: String(values.get("parent")),
+        period: snapshot.period
+      });
+      form.reset();
+      setMessage("仮メンバーを試算中の組織へ追加しました");
+      reload();
+    } catch (reason) { setMessage(reason instanceof Error ? reason.message : "追加できませんでした"); }
+    finally { setBusy(false); }
+  };
+  const clearTrials = async () => {
+    if (!snapshot || !window.confirm("この営業月の仮メンバーをすべて削除しますか？実組織には影響しません。")) return;
+    setBusy(true); setMessage(null);
+    try { const result = await api.clearSimulationMembers(snapshot.period); setMessage(`${result.deleted}人の仮メンバーを削除しました`); setSelectedId(null); reload(); }
+    catch (reason) { setMessage(reason instanceof Error ? reason.message : "削除できませんでした"); }
+    finally { setBusy(false); }
+  };
   return <PageState loading={loading} error={error}>{data && <>
-    <PageHeading kicker="ORGANIZATION" title="組織ツリー" description="配置・紹介・サブIDを分けて管理します" />
+    <PageHeading kicker="ORGANIZATION" title="組織ツリー" description="実組織に仮メンバーを重ねて、複数人の配置を試算します" />
+    <section className="trial-banner"><div><strong>試算中 {data.simulationMembers.length}人</strong><small>点線のカードは仮メンバーです。実際の登録データには反映されません。</small></div>{data.simulationMembers.length > 0 && <button className="text-button danger-text" disabled={busy} onClick={() => void clearTrials()}>仮メンバーを全削除</button>}</section>
+    <form className="panel trial-form" onSubmit={(event) => void addTrial(event)}>
+      <div><p className="eyebrow">MANUAL TRIAL</p><h2>仮メンバーを手動追加</h2></div>
+      <label>試算上の名前<input name="name" required maxLength={80} placeholder={`仮メンバー${data.simulationMembers.length + 1}`} /></label>
+      <label>コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label>
+      <label>配置先<select name="parent">{snapshot?.members.filter((member) => member.endedPeriod === null).map((member) => <option key={member.id} value={member.id}>{trialIds.has(member.id) ? "【仮】" : ""}{member.displayName}</option>)}</select></label>
+      <button className="secondary-button" disabled={busy}>{busy ? "反映中…" : "試算組織へ追加"}</button>
+    </form>
+    {message && <p className="status-message">{message}</p>}
     <div className="organization-layout">
       <section className="panel tree-panel">
-        {data.members.filter((member) => member.parentMemberId === null).map((root) => <TreeNode key={root.id} member={root} snapshot={data} depth={0} selectedId={selected?.id ?? null} onSelect={setSelectedId} />)}
+        {snapshot?.members.filter((member) => member.parentMemberId === null).map((root) => <TreeNode key={root.id} member={root} snapshot={snapshot} simulationIds={trialIds} depth={0} selectedId={selected?.id ?? null} onSelect={setSelectedId} />)}
       </section>
-      {selected && <MemberDetail member={selected} snapshot={data} />}
+      {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} />}
     </div>
   </>}</PageState>;
 }
 
-function TreeNode({ member, snapshot, depth, selectedId, onSelect }: { member: Member; snapshot: OrganizationSnapshot; depth: number; selectedId: string | null; onSelect: (id: string) => void }) {
+function TreeNode({ member, snapshot, simulationIds, depth, selectedId, onSelect }: { member: Member; snapshot: OrganizationSnapshot; simulationIds: Set<string>; depth: number; selectedId: string | null; onSelect: (id: string) => void }) {
   const children = snapshot.members.filter((item) => item.parentMemberId === member.id);
-  const pv = snapshot.purchases.filter((purchase) => purchase.memberId === member.id && purchase.period === snapshot.period).reduce((sum, purchase) => sum + purchase.pv * purchase.quantity, 0);
+  const pv = snapshot.purchases
+    .filter((purchase) => purchase.memberId === member.id && purchase.period === snapshot.period)
+    .filter((purchase) => !simulationIds.has(member.id) || purchase.kind !== "initial")
+    .reduce((sum, purchase) => sum + purchase.pv * purchase.quantity, 0);
   return <div className="tree-branch" style={{ "--depth": depth } as React.CSSProperties}>
-    <button className={selectedId === member.id ? "member-node selected" : "member-node"} onClick={() => onSelect(member.id)}>
-      <span className={`course course-${member.course}`}>{member.course}</span><span><strong>{member.displayName}</strong><small>{number.format(pv)} p.v. · {member.title}</small></span>
+    <button className={`member-node${selectedId === member.id ? " selected" : ""}${simulationIds.has(member.id) ? " simulation" : ""}`} onClick={() => onSelect(member.id)}>
+      <span className={`course course-${member.course}`}>{member.course}</span><span><strong>{member.displayName}{simulationIds.has(member.id) && <em className="trial-tag">仮</em>}</strong><small>{number.format(pv)} p.v. · {member.title}</small></span>
     </button>
-    {children.length > 0 && <div className="tree-children">{children.map((child) => <TreeNode key={child.id} member={child} snapshot={snapshot} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />)}</div>}
+    {children.length > 0 && <div className="tree-children">{children.map((child) => <TreeNode key={child.id} member={child} snapshot={snapshot} simulationIds={simulationIds} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />)}</div>}
   </div>;
 }
 
-function MemberDetail({ member, snapshot }: { member: Member; snapshot: OrganizationSnapshot }) {
+function MemberDetail({ member, snapshot, simulation = false }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean }) {
   const purchases = snapshot.purchases.filter((purchase) => purchase.memberId === member.id).slice(-5).reverse();
-  return <aside className="panel member-detail"><p className="eyebrow">MEMBER DETAIL</p><h2>{member.displayName}</h2>
+  return <aside className={`panel member-detail${simulation ? " simulation-detail" : ""}`}><p className="eyebrow">{simulation ? "TRIAL MEMBER" : "MEMBER DETAIL"}</p><h2>{member.displayName}{simulation && <em className="trial-tag">仮</em>}</h2>
+    {simulation && <p className="trial-note">試算中だけ存在する仮メンバーです。初回・リピート相当を各1件として計算し、公式登録・実組織には反映されません。</p>}
     <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>タイトル</dt><dd>{member.title}</dd></div><div><dt>ID種別</dt><dd>{member.idKind === "master" ? "マスター" : "サブ"}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div></dl>
     <h3>購入履歴</h3>{purchases.length ? purchases.map((purchase) => <div className="history-row" key={purchase.id}><span>{purchase.period} · {purchase.kind}</span><strong>{number.format(purchase.pv)} p.v.</strong></div>) : <p className="muted">履歴はありません</p>}
   </aside>;
@@ -161,12 +204,16 @@ function Products() {
 }
 
 function Simulator() {
-  const tree = useLoad(api.tree, []); const tax = useLoad(api.tax, []); const goal = useLoad(api.goal, []);
-  const [results, setResults] = useState<PlacementResult[]>([]); const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
-  const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!tax.data || !goal.data || !tree.data) return; setBusy(true); setError(null); const values = new FormData(event.currentTarget); try { const response = await api.simulate({ candidateName: String(values.get("name")), course: String(values.get("course")) as CourseCode, period: tree.data.period, targetTitle: goal.data.targetTitle, taxProfile: tax.data }); setResults(response.results); } catch (reason) { setError(reason instanceof Error ? reason.message : "計算できませんでした"); } finally { setBusy(false); } };
-  return <PageState loading={tree.loading || tax.loading || goal.loading} error={tree.error || tax.error || goal.error}>{tree.data && <><PageHeading kicker="PLACEMENT QUEST" title="配置シミュレーター" description="入力は試算にだけ使用し、人物カルテとして保存しません" />
-    <form className="panel simulator-form" onSubmit={(event) => void submit(event)}><label>試算上の名前<input name="name" required placeholder="例：新規A" /><small className="field-note">この名前はD1に保存されません</small></label><label>希望コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label><button className="primary-button" disabled={busy}>{busy ? "全配置を計算中…" : "おすすめ配置を計算"}</button></form>{error && <div className="state-card error">{error}</div>}
-    <div className="results-list">{results.map((result) => <article className={`placement-card rank-${result.rank}`} key={result.placementMemberId}><div className="rank-badge">#{result.rank ?? "-"}</div><div className="placement-heading"><div><small>おすすめ配置</small><h2>{result.placementMemberName} 配下</h2></div><strong className={result.grossDelta >= 0 ? "positive" : "negative"}>{result.grossDelta >= 0 ? "+" : ""}{yen.format(result.grossDelta)}</strong></div><div className="result-stats"><span>タイトル {result.titleBefore} → {result.titleAfter}</span><span>未達 {result.missingBefore} → {result.missingAfter}</span></div><ul>{result.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><p className="warning">{result.warnings.join(" / ")}</p></article>)}</div>
+  const tree = useLoad(api.simulationOrganization, []); const tax = useLoad(api.tax, []); const goal = useLoad(api.goal, []);
+  const [results, setResults] = useState<PlacementResult[]>([]); const [busy, setBusy] = useState(false); const [savingId, setSavingId] = useState<string | null>(null); const [error, setError] = useState<string | null>(null); const [message, setMessage] = useState<string | null>(null);
+  const [candidate, setCandidate] = useState<{ name: string; course: CourseCode } | null>(null);
+  const snapshot = tree.data?.snapshot ?? null;
+  const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!tax.data || !goal.data || !snapshot) return; setBusy(true); setError(null); setMessage(null); const values = new FormData(event.currentTarget); const nextCandidate = { name: String(values.get("name")), course: String(values.get("course")) as CourseCode }; try { const response = await api.simulate({ candidateName: nextCandidate.name, course: nextCandidate.course, period: snapshot.period, targetTitle: goal.data.targetTitle, taxProfile: tax.data }); setCandidate(nextCandidate); setResults(response.results); } catch (reason) { setError(reason instanceof Error ? reason.message : "計算できませんでした"); } finally { setBusy(false); } };
+  const addPlacement = async (result: PlacementResult) => { if (!candidate || !snapshot) return; setSavingId(result.placementMemberId); setError(null); try { await api.createSimulationMember({ displayName: candidate.name, course: candidate.course, parentMemberId: result.placementMemberId, period: snapshot.period }); setMessage(`${candidate.name}を${result.placementMemberName}配下の試算組織へ追加しました`); setResults([]); setCandidate(null); tree.reload(); } catch (reason) { setError(reason instanceof Error ? reason.message : "追加できませんでした"); } finally { setSavingId(null); } };
+  return <PageState loading={tree.loading || tax.loading || goal.loading} error={tree.error || tax.error || goal.error}>{snapshot && <><PageHeading kicker="PLACEMENT QUEST" title="配置シミュレーター" description="仮メンバーを追加しながら、複数人を順番に当てはめられます" />
+    <section className="trial-banner"><div><strong>試算中 {tree.data?.simulationMembers.length ?? 0}人</strong><small>追加済みの仮メンバーを含めて次の配置を再計算します。</small></div><NavLink to="/organization" className="text-button">組織で確認</NavLink></section>
+    <form className="panel simulator-form" onSubmit={(event) => void submit(event)}><label>試算上の名前<input name="name" required placeholder={`例：仮メンバー${(tree.data?.simulationMembers.length ?? 0) + 1}`} /><small className="field-note">配置確定ボタンを押した場合だけ試算用として保存します</small></label><label>希望コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label><button className="primary-button" disabled={busy}>{busy ? "全配置を計算中…" : "おすすめ配置を計算"}</button></form>{error && <div className="state-card error">{error}</div>}{message && <p className="status-message">{message}。続けて次の人を試算できます。</p>}
+    <div className="results-list">{results.map((result) => <article className={`placement-card rank-${result.rank}`} key={result.placementMemberId}><div className="rank-badge">#{result.rank ?? "-"}</div><div className="placement-heading"><div><small>おすすめ配置</small><h2>{result.placementMemberName} 配下</h2></div><strong className={result.grossDelta >= 0 ? "positive" : "negative"}>{result.grossDelta >= 0 ? "+" : ""}{yen.format(result.grossDelta)}</strong></div><div className="result-stats"><span>タイトル {result.titleBefore} → {result.titleAfter}</span><span>未達 {result.missingBefore} → {result.missingAfter}</span></div><ul>{result.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><button className="primary-button placement-save" disabled={!result.eligible || savingId !== null} onClick={() => void addPlacement(result)}>{savingId === result.placementMemberId ? "試算組織へ追加中…" : "この配置を試算組織へ追加"}</button><p className="warning">{result.warnings.join(" / ")}</p></article>)}</div>
   </>}</PageState>;
 }
 

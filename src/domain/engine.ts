@@ -10,6 +10,7 @@ import {
   type OrganizationSnapshot,
   type PlacementResult,
   type PurchaseEvent,
+  type SimulationMember,
   type SimulationRequest,
   type TaxProfile,
   type TitleCode,
@@ -472,6 +473,52 @@ function cloneWithCandidate(
     kind: "repeat"
   };
   return { ...snapshot, members: [...snapshot.members, candidate], purchases: [...snapshot.purchases, purchase, repeatPurchase] };
+}
+
+export function applySimulationMembers(
+  snapshot: OrganizationSnapshot,
+  simulationMembers: SimulationMember[]
+): OrganizationSnapshot {
+  const result: OrganizationSnapshot = {
+    ...snapshot,
+    members: [...snapshot.members],
+    purchases: [...snapshot.purchases]
+  };
+  for (const item of simulationMembers) {
+    if (item.period !== snapshot.period) continue;
+    const candidate: Member = {
+      id: item.id,
+      workspaceId: snapshot.workspaceId,
+      displayName: item.displayName,
+      parentMemberId: item.parentMemberId,
+      introducerMemberId: item.introducerMemberId,
+      masterMemberId: null,
+      trainerMemberId: null,
+      idKind: "master",
+      course: item.course,
+      title: "NONE",
+      trainerCredential: "NONE",
+      sponsorLicense: false,
+      directorPromotedPeriod: null,
+      joinedPeriod: item.period,
+      endedPeriod: null
+    };
+    const purchase: PurchaseEvent = {
+      id: `simulation-initial-${item.id}`,
+      workspaceId: snapshot.workspaceId,
+      memberId: item.id,
+      period: item.period,
+      productCode: null,
+      kind: "initial",
+      status: "confirmed",
+      quantity: 1,
+      price: 0,
+      pv: planConfig.courses[item.course].recurringPv
+    };
+    result.members.push(candidate);
+    result.purchases.push(purchase, { ...purchase, id: `simulation-repeat-${item.id}`, kind: "repeat" });
+  }
+  return result;
 }
 
 export function simulatePlacements(snapshot: OrganizationSnapshot, request: SimulationRequest): PlacementResult[] {

@@ -7,6 +7,8 @@ import type {
   PlacementResult,
   ProductRule,
   PurchaseEvent,
+  SimulationMember,
+  SimulationOrganization,
   SimulationRequest,
   TaxProfile,
   TitleChecklistData
@@ -29,6 +31,9 @@ export const api = {
   dashboard: (period?: string) => request<DashboardData>(`/api/v1/dashboard${period ? `?period=${period}` : ""}`),
   titleChecklists: (period?: string) => request<TitleChecklistData>(`/api/v1/titles/checklist${period ? `?period=${period}` : ""}`),
   tree: (period?: string) => request<OrganizationSnapshot>(`/api/v1/members/tree${period ? `?period=${period}` : ""}`),
+  simulationOrganization: (period?: string) => request<SimulationOrganization>(`/api/v1/simulation-organization${period ? `?period=${period}` : ""}`),
+  createSimulationMember: (member: Pick<SimulationMember, "displayName" | "parentMemberId" | "course" | "period">) => request<SimulationMember>("/api/v1/simulation-members", { method: "POST", body: JSON.stringify(member) }),
+  clearSimulationMembers: (period: string) => request<{ deleted: number }>(`/api/v1/simulation-members?period=${encodeURIComponent(period)}`, { method: "DELETE" }),
   products: () => request<{ planVersion: string; products: ProductRule[] }>("/api/v1/products"),
   purchases: (period?: string) => request<PurchaseEvent[]>(`/api/v1/purchases${period ? `?period=${period}` : ""}`),
   createPurchase: (purchase: Omit<PurchaseEvent, "id" | "workspaceId">) => request<PurchaseEvent>("/api/v1/purchases", { method: "POST", body: JSON.stringify(purchase) }),

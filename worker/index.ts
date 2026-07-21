@@ -3,6 +3,7 @@ import { z } from "zod";
 import { previewCsv, validateMemberRelationships, CSV_TEMPLATES, type CsvKind } from "../src/domain/csv";
 import {
   computeBonus,
+  applySimulationMembers,
   evaluateTitle,
   evaluateTitleChecklists,
   generateMissions,
@@ -19,14 +20,18 @@ import {
   type Goal,
   type Member,
   type PurchaseEvent,
+  type SimulationMember,
+  type SimulationOrganization,
   type TitleChecklistData,
 } from "../src/shared/types";
 import {
   getGoal,
   getTaxProfile,
+  listSimulationMembers,
   loadSnapshot,
   memberInsert,
   purchaseInsert,
+  simulationMemberInsert,
   upsertGoal,
   upsertTaxProfile
 } from "./repository";
@@ -87,6 +92,13 @@ const simulationSchema = z.object({
   targetTitle: titleSchema,
   placementCandidateIds: z.array(z.string()).optional(),
   taxProfile: taxProfileSchema
+});
+
+const simulationMemberSchema = z.object({
+  displayName: z.string().trim().min(1).max(80),
+  parentMemberId: z.string().min(1).max(80),
+  period: periodSchema,
+  course: courseSchema
 });
 
 const forecastSchema = z.object({
@@ -198,6 +210,57 @@ app.get("/api/v1/members/tree", async (context) => {
   return context.json(snapshot);
 });
 
+app.get("/api/v1/simulation-organization", async (context) => {
+  const workspaceId = context.get("workspaceId");
+  const period = await selectedPeriod(context.env.DB, context.req.query("period"));
+  const [snapshot, simulationMembers] = await Promise.all([
+    loadSnapshot(context.env.DB, workspaceId, period),
+    listSimulationMembers(context.env.DB, workspaceId, period)
+  ]);
+  const data: SimulationOrganization = {
+    snapshot: applySimulationMembers(snapshot, simulationMembers),
+    simulationMembers
+  };
+  return context.json(data);
+});
+
+app.post("/api/v1/simulation-members", async (context) => {
+  const input = await boundedJson(context.req.raw, simulationMemberSchema);
+  const workspaceId = context.get("workspaceId");
+  const [actual, current] = await Promise.all([
+    loadSnapshot(context.env.DB, workspaceId, input.period),
+    listSimulationMembers(context.env.DB, workspaceId, input.period)
+  ]);
+  const snapshot = applySimulationMembers(actual, current);
+  const root = snapshot.members.find((member) => member.parentMemberId === null);
+  if (!root) return context.json({ error: "ルート会員が登録されていません" }, 409);
+  const parent = snapshot.members.find((member) => member.id === input.parentMemberId && member.endedPeriod === null);
+  if (!parent) return context.json({ error: "配置先が存在しません" }, 400);
+  if (snapshot.members.filter((member) => member.parentMemberId === parent.id && member.endedPeriod === null).length >= planConfig.firstLineLimit) {
+    return context.json({ error: "配置先の1次ラインが上限7名です" }, 400);
+  }
+  const simulationMember: SimulationMember = {
+    id: `trial-${crypto.randomUUID()}`,
+    workspaceId,
+    displayName: input.displayName,
+    parentMemberId: parent.id,
+    introducerMemberId: root.id,
+    course: input.course,
+    period: input.period,
+    createdAt: new Date().toISOString()
+  };
+  await simulationMemberInsert(context.env.DB, simulationMember).run();
+  return context.json(simulationMember, 201);
+});
+
+app.delete("/api/v1/simulation-members", async (context) => {
+  const period = periodSchema.parse(context.req.query("period"));
+  const result = await context.env.DB.prepare(
+    "DELETE FROM simulation_members WHERE workspace_id = ? AND period = ?"
+  ).bind(context.get("workspaceId"), period).run();
+  return context.json({ deleted: result.meta.changes });
+});
+
 app.post("/api/v1/members", async (context) => {
   const input = await boundedJson(context.req.raw, memberSchema);
   const snapshot = await loadSnapshot(context.env.DB, context.get("workspaceId"), input.joinedPeriod);
@@ -258,7 +321,12 @@ app.put("/api/v1/settings/tax", async (context) => {
 
 app.post("/api/v1/simulations", async (context) => {
   const request = await boundedJson(context.req.raw, simulationSchema);
-  const snapshot = await loadSnapshot(context.env.DB, context.get("workspaceId"), request.period);
+  const workspaceId = context.get("workspaceId");
+  const [actual, simulationMembers] = await Promise.all([
+    loadSnapshot(context.env.DB, workspaceId, request.period),
+    listSimulationMembers(context.env.DB, workspaceId, request.period)
+  ]);
+  const snapshot = applySimulationMembers(actual, simulationMembers);
   return context.json({ results: simulatePlacements(snapshot, request) });
 });
 

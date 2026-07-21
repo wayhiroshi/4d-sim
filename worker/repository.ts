@@ -3,6 +3,7 @@ import type {
   Member,
   OrganizationSnapshot,
   PurchaseEvent,
+  SimulationMember,
   TaxProfile
 } from "../src/shared/types";
 
@@ -37,6 +38,17 @@ interface PurchaseRow {
   pv: number;
 }
 
+interface SimulationMemberRow {
+  id: string;
+  workspace_id: string;
+  display_name: string;
+  parent_member_id: string;
+  introducer_member_id: string;
+  course: SimulationMember["course"];
+  period: string;
+  created_at: string;
+}
+
 const mapMember = (row: MemberRow): Member => ({
   id: row.id,
   workspaceId: row.workspace_id,
@@ -67,6 +79,31 @@ const mapPurchase = (row: PurchaseRow): PurchaseEvent => ({
   price: row.price,
   pv: row.pv
 });
+
+const mapSimulationMember = (row: SimulationMemberRow): SimulationMember => ({
+  id: row.id,
+  workspaceId: row.workspace_id,
+  displayName: row.display_name,
+  parentMemberId: row.parent_member_id,
+  introducerMemberId: row.introducer_member_id,
+  course: row.course,
+  period: row.period,
+  createdAt: row.created_at
+});
+
+export async function listSimulationMembers(db: D1Database, workspaceId: string, period: string): Promise<SimulationMember[]> {
+  const rows = await db.prepare(
+    "SELECT * FROM simulation_members WHERE workspace_id = ? AND period = ? ORDER BY created_at, id"
+  ).bind(workspaceId, period).all<SimulationMemberRow>();
+  return rows.results.map(mapSimulationMember);
+}
+
+export const simulationMemberInsert = (db: D1Database, member: SimulationMember): D1PreparedStatement => db.prepare(
+  "INSERT INTO simulation_members (id, workspace_id, display_name, parent_member_id, introducer_member_id, course, period, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+).bind(
+  member.id, member.workspaceId, member.displayName, member.parentMemberId, member.introducerMemberId,
+  member.course, member.period, member.createdAt
+);
 
 export async function loadSnapshot(db: D1Database, workspaceId: string, period: string): Promise<OrganizationSnapshot> {
   const [memberRows, purchaseRows] = await Promise.all([

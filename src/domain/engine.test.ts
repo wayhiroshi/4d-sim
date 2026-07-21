@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeBonus,
+  applySimulationMembers,
   computeLineBonus,
   evaluateTitle,
   evaluateTitleChecklists,
@@ -9,7 +10,7 @@ import {
   periodForDate,
   simulatePlacements
 } from "./engine";
-import type { CourseCode, Member, OrganizationSnapshot, PurchaseEvent, TaxProfile } from "../shared/types";
+import type { CourseCode, Member, OrganizationSnapshot, PurchaseEvent, SimulationMember, TaxProfile } from "../shared/types";
 
 const period = "2026-07";
 const tax: TaxProfile = { invoiceRegistered: true, withholdingRate: 0, transferFee: 0, offsets: 0, priorCarryover: 0 };
@@ -203,6 +204,22 @@ describe("placement simulation", () => {
     expect(first).toEqual(simulatePlacements(data, request));
     expect(first[0]).toMatchObject({ eligible: false, rank: null });
     expect(data).toEqual(original);
+  });
+
+  it("layers multiple saved trial members without changing the actual organization", () => {
+    const actual = snapshot([member("root", null, "G")], [purchase("p-root", "root", 10670)]);
+    const original = structuredClone(actual);
+    const trials: SimulationMember[] = [
+      { id: "trial-1", workspaceId: "test", displayName: "仮1", parentMemberId: "root", introducerMemberId: "root", course: "A", period, createdAt: "2026-07-22T00:00:01Z" },
+      { id: "trial-2", workspaceId: "test", displayName: "仮2", parentMemberId: "root", introducerMemberId: "root", course: "A", period, createdAt: "2026-07-22T00:00:02Z" },
+      { id: "trial-3", workspaceId: "test", displayName: "仮3", parentMemberId: "trial-1", introducerMemberId: "root", course: "G", period, createdAt: "2026-07-22T00:00:03Z" }
+    ];
+    const layered = applySimulationMembers(actual, trials);
+    expect(layered.members.map((item) => item.id)).toEqual(["root", "trial-1", "trial-2", "trial-3"]);
+    expect(layered.purchases.filter((item) => item.memberId.startsWith("trial-")).length).toBe(6);
+    expect(layered.members.find((item) => item.id === "trial-3")?.parentMemberId).toBe("trial-1");
+    expect(simulatePlacements(layered, { candidateName: "仮4", course: "A", period, targetTitle: "LD", taxProfile: tax }).some((item) => item.placementMemberId === "trial-1")).toBe(true);
+    expect(actual).toEqual(original);
   });
 });
 

@@ -124,6 +124,22 @@ export interface OrganizationSnapshot {
   purchases: PurchaseEvent[];
 }
 
+export interface SimulationMember {
+  id: string;
+  workspaceId: string;
+  displayName: string;
+  parentMemberId: string;
+  introducerMemberId: string;
+  course: CourseCode;
+  period: string;
+  createdAt: string;
+}
+
+export interface SimulationOrganization {
+  snapshot: OrganizationSnapshot;
+  simulationMembers: SimulationMember[];
+}
+
 export interface ConditionResult {
   key: string;
   label: string;
