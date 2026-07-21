@@ -1,0 +1,79 @@
+{
+  "planId": "fordays-jp",
+  "version": "2026-03+2026-05-products",
+  "effectiveFrom": "2026-03-18",
+  "effectiveTo": null,
+  "businessMonthStartDay": 18,
+  "firstLineLimit": 7,
+  "compression": { "enabled": true, "promoteEndedMembers": true, "firstLineMayExceedLimit": true },
+  "courses": {
+    "A": { "code": "A", "recurringPv": 5330, "startBonus": 3740, "maxBaseDepth": 5, "baseLineRates": [0.15, 0.05, 0.05, 0.05, 0.05] },
+    "B": { "code": "B", "recurringPv": 10670, "startBonus": 9640, "maxBaseDepth": 8, "baseLineRates": [0.15, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05] },
+    "F": { "code": "F", "recurringPv": 5330, "startBonus": 3740, "maxBaseDepth": 5, "baseLineRates": [0.15, 0.05, 0.05, 0.05, 0.05] },
+    "G": { "code": "G", "recurringPv": 10670, "startBonus": 9640, "maxBaseDepth": 8, "baseLineRates": [0.15, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05] },
+    "I": { "code": "I", "recurringPv": 2660, "startBonus": 2130, "maxBaseDepth": 3, "baseLineRates": [0.15, 0.05, 0.05] }
+  },
+  "products": [
+    { "code": "005510", "name": "ナチュラル DNコラーゲン Aコース", "price": 9950, "pv": 5330, "conversion": 0, "category": "drink", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "005520", "name": "ナチュラル DNコラーゲン Bコース", "price": 19900, "pv": 10670, "conversion": 0, "category": "drink", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "005700", "name": "ナチュラル DNコラーゲン 追加購入", "price": 9950, "pv": 2010, "conversion": 0, "category": "drink", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "R18", "name": "フォーデイズの極み", "price": 13170, "pv": 5330, "conversion": 3, "category": "supplement", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "T13", "name": "ナチュラル ルナ V プラス", "price": 13500, "pv": 5330, "conversion": 3, "category": "supplement", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "201", "name": "アドバンス III", "price": 13170, "pv": 5330, "conversion": 3, "category": "supplement", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "571", "name": "イムノバイタル HI", "price": 13170, "pv": 5330, "conversion": 3, "category": "supplement", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "D81", "name": "エレン Z", "price": 26340, "pv": 10670, "conversion": 6, "category": "supplement", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "701", "name": "BCAA & グルタミン DX", "price": 7020, "pv": 2140, "conversion": 1.5, "category": "supplement", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "681", "name": "アミノフォース パワーエナジー", "price": 4380, "pv": 1070, "conversion": 1, "category": "supplement", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "331", "name": "レッドDHA", "price": 7020, "pv": 2140, "conversion": 1.5, "category": "supplement", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "E01", "name": "ムーサ LU・セラム gia", "price": 13410, "pv": 5330, "conversion": 3, "category": "cosmetic", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "B11", "name": "ムーサ エッセンス ステム", "price": 13410, "pv": 5330, "conversion": 3, "category": "cosmetic", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "T01", "name": "ムーサ インデュース ローション", "price": 7150, "pv": 2140, "conversion": 1.5, "category": "cosmetic", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "D11", "name": "ムーサ イオ DNジェルクレンジング final", "price": 4470, "pv": 1070, "conversion": 1, "category": "cosmetic", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "D31", "name": "ムーサ イオ DNウォッシング final", "price": 4470, "pv": 1070, "conversion": 1, "category": "cosmetic", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "D71", "name": "ムーサ イオ DNソープ final", "price": 2230, "pv": 530, "conversion": 0.5, "category": "cosmetic", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "A71", "name": "フォーデイズ キャビテーション ジェル", "price": 7150, "pv": 2140, "conversion": 1.5, "category": "cosmetic", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "471", "name": "フォーデイズ 育毛 EX", "price": 13410, "pv": 5330, "conversion": 3, "category": "cosmetic", "effectiveFrom": "2026-05-18", "effectiveTo": null },
+    { "code": "B71", "name": "キューティファミリー ファースト ワン サプリ", "price": 4470, "pv": 1070, "conversion": 1, "category": "other", "effectiveFrom": "2026-05-18", "effectiveTo": null }
+  ],
+  "titles": [
+    { "code": "LD", "label": "ロイヤルドリーマー", "rank": 1, "titleBonusRate": 0, "sameRankRates": [], "directIntroductions": 1, "groupMembers": null, "groupPv": null, "requiredDirectTitle": null, "requiredDirectTitleCount": 0 },
+    { "code": "LL", "label": "ラインリーダー", "rank": 2, "titleBonusRate": 0.07, "sameRankRates": [0.03], "directIntroductions": 5, "groupMembers": 30, "groupPv": 159900, "requiredDirectTitle": "LD", "requiredDirectTitleCount": 2 },
+    { "code": "DR", "label": "ディレクター", "rank": 3, "titleBonusRate": 0.07, "sameRankRates": [0.03], "directIntroductions": 5, "groupMembers": null, "groupPv": null, "requiredDirectTitle": null, "requiredDirectTitleCount": 0 },
+    { "code": "SD", "label": "スターディレクター", "rank": 4, "titleBonusRate": 0.13, "sameRankRates": [0.02, 0.02], "directIntroductions": 10, "groupMembers": 150, "groupPv": 799500, "requiredDirectTitle": "DR", "requiredDirectTitleCount": 1 },
+    { "code": "TD", "label": "ツインスターディレクター", "rank": 5, "titleBonusRate": 0.2, "sameRankRates": [0.02, 0.01], "directIntroductions": 15, "groupMembers": 800, "groupPv": 4264000, "requiredDirectTitle": "DR", "requiredDirectTitleCount": 2 },
+    { "code": "TRD", "label": "トリプルスターディレクター", "rank": 6, "titleBonusRate": 0.24, "sameRankRates": [0.02, 0.02, 0.01], "directIntroductions": 20, "groupMembers": 2000, "groupPv": 10660000, "requiredDirectTitle": "DR", "requiredDirectTitleCount": 3 }
+  ],
+  "ld": { "firstLineActive": 3, "secondLineActive": 2, "directActive": 1 },
+  "director": {
+    "directActive": 5,
+    "pattern1": { "first": 3, "second": 9, "third": 27, "rollingTwoMonthPv": 266500 },
+    "pattern2": { "firstTwoLineTotal": 12, "currentPv": 300000, "rollingTwoMonthPv": 330000 },
+    "maintenancePv": 266500,
+    "promotionFollowingMonthMaintenanceException": true,
+    "pattern2ExcludesSevenOrMoreIds": false
+  },
+  "lineRatesByTitle": {
+    "LD": {
+      "A": [0.15, 0.1, 0.1, 0.1, 0.05], "F": [0.15, 0.1, 0.1, 0.1, 0.05],
+      "B": [0.15, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0.05], "G": [0.15, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0.05],
+      "I": [0.15, 0.1, 0.1]
+    },
+    "DR": {
+      "A": [0.15, 0.1, 0.1, 0.1, 0.1], "F": [0.15, 0.1, 0.1, 0.1, 0.1],
+      "B": [0.15, 0.1, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0.02, 0.02], "G": [0.15, 0.1, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0.02, 0.02]
+    }
+  },
+  "tax": {
+    "paymentCarryoverThreshold": 3000,
+    "invoiceTransitions": [
+      { "from": "2023-10-01", "to": "2026-09-30", "disallowedInputTaxRate": 0.2 },
+      { "from": "2026-10-01", "to": "2029-09-30", "disallowedInputTaxRate": 0.5 }
+    ]
+  },
+  "sources": [
+    { "name": "フォーデイズ ビジネスマニュアル", "revision": "2026-03", "pages": "3-18" },
+    { "name": "製品ガイド", "revision": "RA202605", "pages": "1-12" },
+    { "name": "ポジションとタイトル等の取得条件", "revision": "2025-09-30", "pages": "1" },
+    { "name": "新しいDR資格取得条件", "revision": "2025-07-18/08-20修正", "pages": "1" }
+  ]
+}

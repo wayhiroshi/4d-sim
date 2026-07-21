@@ -1,0 +1,43 @@
+{
+  "name": "fordays-navigator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:production": "tsc -b && CLOUDFLARE_ENV=production vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:worker": "vitest run worker",
+    "typecheck": "tsc -b --pretty false",
+    "verify:ci": "npm run typecheck && npm test && npm run build:production",
+    "cf-typegen": "wrangler types worker-configuration.d.ts",
+    "db:migrate:local": "wrangler d1 migrations apply fordays-navigator --local",
+    "db:migrate:remote": "wrangler d1 migrations apply fordays-navigator --remote",
+    "deploy:dry": "npm run build:production && wrangler deploy --env production --dry-run",
+    "deploy:production": "npm run build:production && wrangler deploy --env production",
+    "deploy:ci": "wrangler deploy --env production",
+    "check:startup": "wrangler check startup"
+  },
+  "dependencies": {
+    "hono": "^4.10.7",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.5",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.45.1",
+    "@cloudflare/workers-types": "^5.20260721.1",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.0.4",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.2",
+    "vite-plugin-pwa": "^1.1.0",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.112.0"
+  }
+}
