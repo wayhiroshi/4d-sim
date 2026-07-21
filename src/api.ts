@@ -8,7 +8,8 @@ import type {
   ProductRule,
   PurchaseEvent,
   SimulationRequest,
-  TaxProfile
+  TaxProfile,
+  TitleChecklistData
 } from "./shared/types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -26,6 +27,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   dashboard: (period?: string) => request<DashboardData>(`/api/v1/dashboard${period ? `?period=${period}` : ""}`),
+  titleChecklists: (period?: string) => request<TitleChecklistData>(`/api/v1/titles/checklist${period ? `?period=${period}` : ""}`),
   tree: (period?: string) => request<OrganizationSnapshot>(`/api/v1/members/tree${period ? `?period=${period}` : ""}`),
   products: () => request<{ planVersion: string; products: ProductRule[] }>("/api/v1/products"),
   purchases: (period?: string) => request<PurchaseEvent[]>(`/api/v1/purchases${period ? `?period=${period}` : ""}`),

@@ -3,6 +3,7 @@ import {
   computeBonus,
   computeLineBonus,
   evaluateTitle,
+  evaluateTitleChecklists,
   generateMissions,
   groupPv,
   periodForDate,
@@ -215,5 +216,21 @@ describe("simulation checks", () => {
     expect(missions.length).toBeGreaterThan(0);
     expect(missions.every((mission) => mission.category === "title")).toBe(true);
     expect(missions[0]?.title).toContain("不足条件を試算");
+  });
+
+  it("lists every configured title with current gaps and director alternatives", () => {
+    const data = snapshot([member("root", null)], [purchase("root", "root", 5330)]);
+    const titles = evaluateTitleChecklists(data, "root");
+    expect(titles.map((title) => title.code)).toEqual(["LD", "LL", "DR", "SD", "TD", "TRD"]);
+    expect(titles.find((title) => title.code === "LD")).toMatchObject({ status: "next", progress: 25 });
+    expect(titles.find((title) => title.code === "DR")?.alternatives?.map((group) => group.label)).toEqual(["取得パターン1", "取得パターン2"]);
+    expect(titles.every((title) => title.conditions.length > 0)).toBe(true);
+  });
+
+  it("shows director maintenance without acquisition alternatives for an existing director", () => {
+    const root = { ...member("root", null, "G"), title: "DR" as const, directorPromotedPeriod: "2026-06" };
+    const director = evaluateTitleChecklists(snapshot([root], [purchase("root", "root", 5330)]), "root").find((title) => title.code === "DR");
+    expect(director?.alternatives).toBeUndefined();
+    expect(director?.conditions.some((condition) => condition.key === "director-maintenance")).toBe(true);
   });
 });

@@ -13,6 +13,7 @@ import {
   type SimulationRequest,
   type TaxProfile,
   type TitleCode,
+  type TitleChecklistItem,
   type TitleEvaluation
 } from "../shared/types";
 
@@ -145,7 +146,11 @@ function numberCondition(key: string, label: string, current: number, required: 
   return { key, label, current, required, met: current >= required };
 }
 
-export function evaluateTitle(snapshot: OrganizationSnapshot, rootId: string): TitleEvaluation {
+function computeTitleConditions(snapshot: OrganizationSnapshot, rootId: string): {
+  achievedTitle: TitleCode;
+  conditionsByTitle: Map<Exclude<TitleCode, "NONE">, ConditionResult[]>;
+  directorAlternatives: NonNullable<TitleChecklistItem["alternatives"]>;
+} {
   const root = snapshot.members.find((member) => member.id === rootId);
   if (!root) throw new Error(`Member not found: ${rootId}`);
   const counts = lineCounts(snapshot, rootId);
@@ -164,17 +169,31 @@ export function evaluateTitle(snapshot: OrganizationSnapshot, rootId: string): T
   ];
   const ldMet = ldConditions.every((condition) => condition.met);
 
-  const directorPattern1 =
-    (counts[1] ?? 0) >= planConfig.director.pattern1.first &&
-    (counts[2] ?? 0) >= planConfig.director.pattern1.second &&
-    (counts[3] ?? 0) >= planConfig.director.pattern1.third &&
-    currentDirectorPv + previousDirectorPv >= planConfig.director.pattern1.rollingTwoMonthPv;
+  const directorPattern1Conditions = [
+    numberCondition("director-p1-first", "1次ラインのアクティブ人数", counts[1] ?? 0, planConfig.director.pattern1.first),
+    numberCondition("director-p1-second", "2次ラインのアクティブ人数", counts[2] ?? 0, planConfig.director.pattern1.second),
+    numberCondition("director-p1-third", "3次ラインのアクティブ人数", counts[3] ?? 0, planConfig.director.pattern1.third),
+    numberCondition("director-p1-pv", "1〜3次ラインの2か月累計p.v.", currentDirectorPv + previousDirectorPv, planConfig.director.pattern1.rollingTwoMonthPv)
+  ];
+  const directorPattern1 = directorPattern1Conditions.every((condition) => condition.met);
   const ownedIdCount = 1 + snapshot.members.filter((member) => member.masterMemberId === rootId && member.idKind === "sub").length;
-  const directorPattern2 =
-    (!planConfig.director.pattern2ExcludesSevenOrMoreIds || ownedIdCount < 7) &&
-    (counts[1] ?? 0) + (counts[2] ?? 0) >= planConfig.director.pattern2.firstTwoLineTotal &&
-    (currentDirectorPv >= planConfig.director.pattern2.currentPv ||
-      currentDirectorPv + previousDirectorPv >= planConfig.director.pattern2.rollingTwoMonthPv);
+  const pattern2IdEligible = !planConfig.director.pattern2ExcludesSevenOrMoreIds || ownedIdCount < 7;
+  const directorPattern2Conditions: ConditionResult[] = [
+    numberCondition("director-p2-lines", "1・2次ラインのアクティブ合計", (counts[1] ?? 0) + (counts[2] ?? 0), planConfig.director.pattern2.firstTwoLineTotal),
+    boolCondition(
+      "director-p2-pv",
+      `当月 ${currentDirectorPv} / ${planConfig.director.pattern2.currentPv} p.v. または2か月 ${currentDirectorPv + previousDirectorPv} / ${planConfig.director.pattern2.rollingTwoMonthPv} p.v.`,
+      currentDirectorPv >= planConfig.director.pattern2.currentPv || currentDirectorPv + previousDirectorPv >= planConfig.director.pattern2.rollingTwoMonthPv
+    )
+  ];
+  if (planConfig.director.pattern2ExcludesSevenOrMoreIds) {
+    directorPattern2Conditions.unshift(boolCondition("director-p2-id", "保有ID数の条件", pattern2IdEligible));
+  }
+  const directorPattern2 = directorPattern2Conditions.every((condition) => condition.met);
+  const directorAcquisitionAlternatives: NonNullable<TitleChecklistItem["alternatives"]> = [
+    { label: "取得パターン1", met: directorPattern1, conditions: directorPattern1Conditions },
+    { label: "取得パターン2", met: directorPattern2, conditions: directorPattern2Conditions }
+  ];
   const acquisitionConditions: ConditionResult[] = [
     boolCondition("director-course", "本人がB・Gコース", root.course === "B" || root.course === "G"),
     boolCondition("director-license", "スポンサーライセンス", root.sponsorLicense),
@@ -195,10 +214,14 @@ export function evaluateTitle(snapshot: OrganizationSnapshot, rootId: string): T
   ];
   const alreadyDirector = titleAtLeast(root.title, "DR");
   const directorConditions = alreadyDirector ? maintenanceConditions : acquisitionConditions;
+  const directorAlternatives = alreadyDirector ? [] : directorAcquisitionAlternatives;
   const directorMet = directorConditions.every((condition) => condition.met);
+  const conditionsByTitle = new Map<Exclude<TitleCode, "NONE">, ConditionResult[]>([
+    ["LD", ldConditions],
+    ["DR", directorConditions]
+  ]);
 
   let achievedTitle: TitleCode = ldMet ? "LD" : "NONE";
-  let nextConditions = ldConditions;
   for (const rule of planConfig.titles.filter((item) => !["LD", "DR"].includes(item.code))) {
     const conditions: ConditionResult[] = [
       boolCondition("active", "本人が当月アクティブ", rootActive),
@@ -217,19 +240,43 @@ export function evaluateTitle(snapshot: OrganizationSnapshot, rootId: string): T
         rule.requiredDirectTitleCount
       )
     ];
+    conditionsByTitle.set(rule.code, conditions);
     if (conditions.every((condition) => condition.met)) achievedTitle = rule.code;
-    else if (TITLE_ORDER.indexOf(rule.code) === TITLE_ORDER.indexOf(achievedTitle) + 1) nextConditions = conditions;
   }
   if (directorMet && TITLE_ORDER.indexOf(achievedTitle) < TITLE_ORDER.indexOf("DR")) achievedTitle = "DR";
 
+  return { achievedTitle, conditionsByTitle, directorAlternatives };
+}
+
+export function evaluateTitle(snapshot: OrganizationSnapshot, rootId: string): TitleEvaluation {
+  const { achievedTitle, conditionsByTitle } = computeTitleConditions(snapshot, rootId);
+
   const nextIndex = TITLE_ORDER.indexOf(achievedTitle) + 1;
   const nextTitle = TITLE_ORDER[nextIndex] ?? null;
-  if (nextTitle === "DR") nextConditions = directorConditions;
-  if (achievedTitle === "NONE") nextConditions = ldConditions;
+  const nextConditions = nextTitle === null || nextTitle === "NONE" ? [] : conditionsByTitle.get(nextTitle) ?? [];
   const progress = nextConditions.length
     ? Math.round((nextConditions.filter((condition) => condition.met).length / nextConditions.length) * 100)
     : 100;
   return { achievedTitle, nextTitle, progress, conditions: nextConditions };
+}
+
+export function evaluateTitleChecklists(snapshot: OrganizationSnapshot, rootId: string): TitleChecklistItem[] {
+  const { achievedTitle, conditionsByTitle, directorAlternatives } = computeTitleConditions(snapshot, rootId);
+  const achievedIndex = TITLE_ORDER.indexOf(achievedTitle);
+  const nextTitle = TITLE_ORDER[achievedIndex + 1] ?? null;
+  return [...planConfig.titles].sort((a, b) => a.rank - b.rank).map((rule) => {
+    const conditions = conditionsByTitle.get(rule.code) ?? [];
+    const metCount = conditions.filter((condition) => condition.met).length;
+    return {
+      code: rule.code,
+      label: rule.label,
+      rank: rule.rank,
+      status: TITLE_ORDER.indexOf(rule.code) <= achievedIndex ? "achieved" : rule.code === nextTitle ? "next" : "future",
+      progress: conditions.length ? Math.round((metCount / conditions.length) * 100) : 100,
+      conditions,
+      ...(rule.code === "DR" && directorAlternatives.length ? { alternatives: directorAlternatives } : {})
+    };
+  });
 }
 
 function ratesFor(member: Member, evaluatedTitle: TitleCode): number[] {

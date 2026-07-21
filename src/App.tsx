@@ -12,6 +12,7 @@ import {
   type OrganizationSnapshot,
   type PlacementResult,
   type TaxProfile,
+  type TitleChecklistItem,
   type TitleCode
 } from "./shared/types";
 
@@ -60,6 +61,7 @@ function Layout() {
           <Route path="/forecast" element={<Forecast />} />
           <Route path="/imports" element={<Imports />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/reference/titles" element={<TitleReference />} />
           <Route path="/more" element={<More />} />
         </Routes>
       </main>
@@ -198,7 +200,35 @@ function Settings() {
   return <PageState loading={taxLoad.loading || goalLoad.loading} error={taxLoad.error || goalLoad.error}>{tax && goal && <><PageHeading kicker="SETTINGS" title="目標と概算条件" description="概算手取の条件は公式明細と分けて管理します" /><section className="panel form-grid"><label>目標タイトル<select value={goal.targetTitle} onChange={(event) => setGoal({ ...goal, targetTitle: event.target.value as TitleCode })}>{TITLE_ORDER.filter((title) => title !== "NONE").map((title) => <option key={title}>{title}</option>)}</select></label><label>目標営業月<input type="month" value={goal.targetPeriod} onChange={(event) => setGoal({ ...goal, targetPeriod: event.target.value })} /></label><label className="check-label span-2"><input type="checkbox" checked={tax.invoiceRegistered} onChange={(event) => setTax({ ...tax, invoiceRegistered: event.target.checked })} />適格請求書発行事業者として登録済み</label><label>源泉徴収率<input type="number" min="0" max="100" step="0.01" value={tax.withholdingRate * 100} onChange={(event) => setTax({ ...tax, withholdingRate: Number(event.target.value) / 100 })} />%</label><label>振込手数料<input type="number" min="0" value={tax.transferFee} onChange={(event) => setTax({ ...tax, transferFee: Number(event.target.value) })} /></label><label>相殺額<input type="number" min="0" value={tax.offsets} onChange={(event) => setTax({ ...tax, offsets: Number(event.target.value) })} /></label><label>前月繰越<input type="number" min="0" value={tax.priorCarryover} onChange={(event) => setTax({ ...tax, priorCarryover: Number(event.target.value) })} /></label><div className="form-actions span-2"><button className="primary-button" onClick={() => void save()}>{saved ? "保存しました" : "設定を保存"}</button></div></section><p className="disclaimer">源泉徴収、インボイス経過措置、相殺、手数料を用いた概算です。税務判断には使用せず、公式支払明細と専門家の確認を優先してください。</p></>}</PageState>;
 }
 
-function More() { return <><PageHeading kicker="TOOLS" title="その他" description="試算に使う設定とマスタ" /><div className="menu-grid"><NavLink to="/products"><span>▦</span><strong>商品マスタ</strong><small>価格・p.v.自動計算</small></NavLink><NavLink to="/imports"><span>⇩</span><strong>CSV取り込み</strong><small>会員・月次購入</small></NavLink><NavLink to="/settings"><span>⚙</span><strong>設定</strong><small>目標・概算条件</small></NavLink></div><section className="panel about-card"><h2>このアプリについて</h2><p>組織、タイトル、報酬、配置、将来条件の試算を行う、非公式の個人用シミュレーターです。公式サイトへの自動ログイン、登録、購入は行いません。</p><p>人物・関係性・フォローの管理は「つながりカルテ」で行い、Navigatorには保存しません。将来連携する場合も、試算に必要な最小限のデータだけを受け取ります。</p></section></>; }
+function conditionValue(value: number | boolean | string) {
+  if (typeof value === "boolean") return value ? "達成" : "未達";
+  return typeof value === "number" ? number.format(value) : value;
+}
+
+function conditionShortage(condition: TitleChecklistItem["conditions"][number]) {
+  if (condition.met) return "達成";
+  if (typeof condition.current === "number" && typeof condition.required === "number") {
+    return `あと ${number.format(Math.max(0, condition.required - condition.current))}`;
+  }
+  return "未達";
+}
+
+function TitleConditions({ conditions }: { conditions: TitleChecklistItem["conditions"] }) {
+  return <div className="title-condition-list">{conditions.map((condition) => <div className={condition.met ? "title-condition met" : "title-condition"} key={condition.key}><span>{condition.met ? "✓" : "!"}</span><div><strong>{condition.label}</strong><small>現在 {conditionValue(condition.current)} / 必要 {conditionValue(condition.required)}</small></div><em>{conditionShortage(condition)}</em></div>)}</div>;
+}
+
+function TitleReference() {
+  const { data, error, loading } = useLoad(api.titleChecklists, []);
+  return <PageState loading={loading} error={error}>{data && <>
+    <PageHeading kicker="REFERENCE" title="全タイトル条件" description="現在の組織と実績で、各タイトルまでの不足を確認します" />
+    <section className="panel title-reference-summary"><div><small>現在タイトル</small><strong>{data.achievedTitle === "NONE" ? "未取得" : data.achievedTitle}</strong></div><div><small>対象営業月</small><strong>{data.period}</strong></div><div><small>ルール設定版</small><strong>{data.planVersion}</strong></div></section>
+    <div className="title-checklist">{data.titles.map((title) => <details className={`title-reference-card ${title.status}`} key={title.code} open={title.status === "next"}><summary><span className="title-code">{title.code}</span><div><strong>{title.label}</strong><small>{title.conditions.filter((condition) => !condition.met).length}件の未達条件</small></div><div className="title-progress"><strong>{title.progress}%</strong><span>{title.status === "achieved" ? "達成圏" : title.status === "next" ? "次の目標" : "参考"}</span></div></summary><div className="title-reference-body"><TitleConditions conditions={title.conditions} />{title.alternatives && <section className="alternative-section"><h3>いずれかの取得パターンを達成</h3><div className="alternative-grid">{title.alternatives.map((alternative) => <div className={alternative.met ? "alternative-card met" : "alternative-card"} key={alternative.label}><div className="alternative-heading"><strong>{alternative.label}</strong><span>{alternative.met ? "達成" : "未達"}</span></div><TitleConditions conditions={alternative.conditions} /></div>)}</div></section>}</div></details>)}</div>
+    <section className="panel source-panel"><h2>設定データの出典</h2>{data.sources.map((source) => <p key={`${source.name}-${source.revision}`}><strong>{source.name}</strong><span>{source.revision}・{source.pages}</span></p>)}</section>
+    <p className="disclaimer">参考表示です。取得・維持の正式判定は最新の公式資料とフォーデイズ公式画面を優先してください。</p>
+  </>}</PageState>;
+}
+
+function More() { return <><PageHeading kicker="TOOLS" title="その他" description="試算に使う設定とマスタ" /><div className="menu-grid"><NavLink to="/products"><span>▦</span><strong>商品マスタ</strong><small>価格・p.v.自動計算</small></NavLink><NavLink to="/imports"><span>⇩</span><strong>CSV取り込み</strong><small>会員・月次購入</small></NavLink><NavLink to="/settings"><span>⚙</span><strong>設定</strong><small>目標・概算条件</small></NavLink></div><section className="panel reference-tools"><p className="eyebrow">REFERENCE</p><h2>参考機能</h2><NavLink to="/reference/titles"><span>一覧</span><div><strong>全タイトル条件</strong><small>各タイトルの条件表と現在の不足を確認</small></div><b>›</b></NavLink></section><section className="panel about-card"><h2>このアプリについて</h2><p>組織、タイトル、報酬、配置、将来条件の試算を行う、非公式の個人用シミュレーターです。公式サイトへの自動ログイン、登録、購入は行いません。</p><p>人物・関係性・フォローの管理は「つながりカルテ」で行い、Navigatorには保存しません。将来連携する場合も、試算に必要な最小限のデータだけを受け取ります。</p></section></>; }
 
 function PageHeading({ kicker, title, description, action }: { kicker: string; title: string; description: string; action?: ReactNode }) { return <div className="page-heading"><div><p className="eyebrow">{kicker}</p><h1>{title}</h1><p>{description}</p></div>{action}</div>; }
 

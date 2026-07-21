@@ -139,6 +139,28 @@ export interface TitleEvaluation {
   conditions: ConditionResult[];
 }
 
+export interface TitleChecklistItem {
+  code: Exclude<TitleCode, "NONE">;
+  label: string;
+  rank: number;
+  status: "achieved" | "next" | "future";
+  progress: number;
+  conditions: ConditionResult[];
+  alternatives?: Array<{
+    label: string;
+    met: boolean;
+    conditions: ConditionResult[];
+  }>;
+}
+
+export interface TitleChecklistData {
+  period: string;
+  achievedTitle: TitleCode;
+  planVersion: string;
+  titles: TitleChecklistItem[];
+  sources: PlanConfig["sources"];
+}
+
 export interface BonusBreakdown {
   start: number;
   trainer: number;

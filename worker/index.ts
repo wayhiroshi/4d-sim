@@ -4,6 +4,7 @@ import { previewCsv, validateMemberRelationships, CSV_TEMPLATES, type CsvKind } 
 import {
   computeBonus,
   evaluateTitle,
+  evaluateTitleChecklists,
   generateMissions,
   groupPv,
   periodForDate,
@@ -18,6 +19,7 @@ import {
   type Goal,
   type Member,
   type PurchaseEvent,
+  type TitleChecklistData,
 } from "../src/shared/types";
 import {
   getGoal,
@@ -170,6 +172,22 @@ app.get("/api/v1/dashboard", async (context) => {
     title,
     bonus,
     missions: generateMissions(title)
+  };
+  return context.json(data);
+});
+
+app.get("/api/v1/titles/checklist", async (context) => {
+  const period = await selectedPeriod(context.env.DB, context.req.query("period"));
+  const snapshot = await loadSnapshot(context.env.DB, context.get("workspaceId"), period);
+  const rootMember = snapshot.members.find((member) => member.parentMemberId === null);
+  if (!rootMember) return context.json({ error: "ルート会員が登録されていません" }, 409);
+  const achievedTitle = evaluateTitle(snapshot, rootMember.id).achievedTitle;
+  const data: TitleChecklistData = {
+    period,
+    achievedTitle,
+    planVersion: planConfig.version,
+    titles: evaluateTitleChecklists(snapshot, rootMember.id),
+    sources: planConfig.sources
   };
   return context.json(data);
 });
