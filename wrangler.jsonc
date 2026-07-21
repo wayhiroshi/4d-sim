@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "fordays-navigator",
+  "name": "4d-sim",
+  "account_id": "7c24e717364e26ae5099acad5204afc3",
   "main": "worker/index.ts",
   "compatibility_date": "2026-07-21",
   "compatibility_flags": ["nodejs_compat"],
@@ -12,33 +13,17 @@
     {
       "binding": "DB",
       "database_name": "fordays-navigator",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "0c810361-824c-4b51-862f-8416df460c52",
       "migrations_dir": "migrations"
     }
   ],
   "vars": {
-    "APP_ENV": "development",
-    "ACCESS_REQUIRED": "false"
+    "APP_ENV": "production",
+    "ACCESS_REQUIRED": "true"
   },
   "observability": {
     "enabled": true,
     "logs": { "head_sampling_rate": 1 },
     "traces": { "enabled": true, "head_sampling_rate": 0.05 }
-  },
-  "env": {
-    "production": {
-      "vars": {
-        "APP_ENV": "production",
-        "ACCESS_REQUIRED": "true"
-      },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "fordays-navigator",
-          "database_id": "00000000-0000-0000-0000-000000000000",
-          "migrations_dir": "migrations"
-        }
-      ]
-    }
   }
 }

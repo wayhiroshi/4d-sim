@@ -23,6 +23,7 @@ Node.js 22以降を使用します。
 
 ```sh
 npm install
+cp .dev.vars.example .dev.vars
 npm run cf-typegen
 npm run db:migrate:local
 npm run dev
@@ -56,7 +57,7 @@ npm run check:startup
    npx wrangler d1 create fordays-navigator
    ```
 
-2. 返された`database_id`で [`wrangler.jsonc`](wrangler.jsonc) のゼロUUIDを、通常設定と`env.production`の2か所とも置き換えます。
+2. 返された`database_id`とCloudflareの`account_id`を [`wrangler.jsonc`](wrangler.jsonc) に設定します。
 3. Cloudflare Zero TrustでWorkerの公開ホストをSelf-hosted applicationへ登録し、本人メールのAllow policyを作成します。
 4. 最初のWorkerだけ手動で作成し、Accessの適用をシークレットウィンドウで確認します。
 
@@ -64,7 +65,7 @@ npm run check:startup
    npm run deploy:ci
    ```
 
-5. CloudflareのWorker `fordays-navigator-production`で `Settings > Builds > Connect` を開き、GitHubリポジトリを接続します。設定値は次のとおりです。
+5. CloudflareのWorker `4d-sim`で `Settings > Builds > Connect` を開き、GitHubリポジトリを接続します。設定値は次のとおりです。
 
    | 項目 | 設定値 |
    | --- | --- |
@@ -81,7 +82,7 @@ npm run check:startup
 Workers Buildsの自動公開ではD1マイグレーションを実行しません。スキーマ変更を含むリリースでは、公開前にバックアップを取得し、内容を確認してから手動で適用します。
 
 ```sh
-npm run db:migrate:remote -- --env production
+npm run db:migrate:remote
 ```
 
 マイグレーションが新コードより先に適用されても既存コードが動く、後方互換な変更を基本とします。破壊的変更は自動公開と同時に行いません。
