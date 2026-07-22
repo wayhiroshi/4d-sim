@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeBonus,
+  compareBonusBreakdowns,
   applySimulationMembers,
   computeLineBonus,
   evaluateTitle,
@@ -247,6 +248,10 @@ describe("placement simulation", () => {
     expect(layered.purchases.filter((item) => item.memberId.startsWith("trial-")).length).toBe(6);
     expect(layered.members.find((item) => item.id === "trial-3")?.parentMemberId).toBe("trial-1");
     expect(computeBonus(layered, "root", tax).trainer).toBe(670);
+    const cumulativeDelta = compareBonusBreakdowns(computeBonus(actual, "root", tax), computeBonus(layered, "root", tax));
+    expect(cumulativeDelta.oneTime).toBe(cumulativeDelta.start + cumulativeDelta.trainer);
+    expect(cumulativeDelta.recurring).toBe(cumulativeDelta.line + cumulativeDelta.director + cumulativeDelta.title);
+    expect(cumulativeDelta.gross).toBe(cumulativeDelta.oneTime + cumulativeDelta.recurring);
     expect(simulatePlacements(layered, { candidateName: "仮4", course: "A", period, targetTitle: "LD", taxProfile: tax }).some((item) => item.placementMemberId === "trial-1")).toBe(true);
     expect(actual).toEqual(original);
   });

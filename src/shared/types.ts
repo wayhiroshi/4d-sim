@@ -143,6 +143,11 @@ export interface SimulationMember {
 export interface SimulationOrganization {
   snapshot: OrganizationSnapshot;
   simulationMembers: SimulationMember[];
+  bonusComparison: {
+    actual: BonusBreakdown;
+    simulated: BonusBreakdown;
+    delta: PlacementBonusDelta;
+  };
 }
 
 export interface ConditionResult {

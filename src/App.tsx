@@ -12,6 +12,7 @@ import {
   type OrganizationSnapshot,
   type PlacementResult,
   type SavedForecast,
+  type SimulationOrganization,
   type TaxProfile,
   type TrainerBonusRole,
   type TitleChecklistItem,
@@ -200,6 +201,7 @@ function Organization() {
       <p className="manual-member-note">この操作はNavigator内だけに保存され、フォーデイズ公式サイトの登録・配置は変更しません。</p>
     </form>
     <section className="trial-banner"><div><strong>試算中 {data.simulationMembers.length}人</strong><small>点線のカードは仮メンバーです。実際の登録データには反映されません。</small></div>{data.simulationMembers.length > 0 && <button className="text-button danger-text" disabled={busy} onClick={() => void clearTrials()}>仮メンバーを全削除</button>}</section>
+    {data.simulationMembers.length > 0 && <TrialBonusSummary comparison={data.bonusComparison} count={data.simulationMembers.length} />}
     <form className="panel trial-form" onSubmit={(event) => void addTrial(event)}>
       <div><p className="eyebrow">MANUAL TRIAL</p><h2>仮メンバーを手動追加</h2></div>
       <label>試算上の名前<input name="name" required maxLength={80} placeholder={`仮メンバー${data.simulationMembers.length + 1}`} /></label>
@@ -216,6 +218,11 @@ function Organization() {
       {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} onRenamed={(displayName) => { setMessage(`表示名を「${displayName}」へ変更しました`); reload(); }} />}
     </div>
   </>}</PageState>;
+}
+
+function TrialBonusSummary({ comparison, count }: { comparison: SimulationOrganization["bonusComparison"]; count: number }) {
+  const signedYen = (value: number) => `${value >= 0 ? "+" : ""}${yen.format(value)}`;
+  return <section className="panel trial-bonus-summary"><div className="panel-title"><div><p className="eyebrow">TRIAL REWARD</p><h2>仮配置後の報酬試算</h2></div><span className="status-chip">仮{count}人を反映</span></div><div className="trial-bonus-metrics"><div><small>登録月の総ボーナス</small><strong>{yen.format(comparison.simulated.gross)}</strong></div><div><small>実組織との差</small><strong className={comparison.delta.gross >= 0 ? "positive" : "negative"}>{signedYen(comparison.delta.gross)}</strong></div><div><small>概算振込額</small><strong>{yen.format(comparison.simulated.estimatedNet)}</strong></div><div><small>概算振込額の差</small><strong className={comparison.delta.estimatedNet >= 0 ? "positive" : "negative"}>{signedYen(comparison.delta.estimatedNet)}</strong></div></div><BonusDeltaDetails delta={comparison.delta} /><p className="warning">仮メンバー全員の初回・定期購入相当を現在営業月へ反映した参考試算です。公式登録・報酬明細は変更しません。</p></section>;
 }
 
 function TreeNode({ member, snapshot, simulationIds, depth, selectedId, onSelect }: { member: Member; snapshot: OrganizationSnapshot; simulationIds: Set<string>; depth: number; selectedId: string | null; onSelect: (id: string) => void }) {
@@ -275,7 +282,10 @@ function Simulator() {
 }
 
 function BonusBreakdownDetails({ result }: { result: PlacementResult }) {
-  const delta = result.bonusDelta;
+  return <BonusDeltaDetails delta={result.bonusDelta} />;
+}
+
+function BonusDeltaDetails({ delta }: { delta: PlacementResult["bonusDelta"] }) {
   return <details className="bonus-details"><summary><span>報酬内訳を見る</span><strong>{yen.format(delta.oneTime)} ＋ {yen.format(delta.recurring)}</strong></summary><div className="bonus-sections"><section><div className="bonus-section-heading"><strong>今回の登録時のみ</strong><span>{yen.format(delta.oneTime)}</span></div><p><span>スタートボーナス</span><b>{yen.format(delta.start)}</b></p><p><span>Aさん役（トレーナー）</span><b>{yen.format(delta.trainer)}</b></p><small>初回購入に対して発生</small></section><section><div className="bonus-section-heading"><strong>定期・追加購入が続く月</strong><span>{yen.format(delta.recurring)}</span></div><p><span>ラインボーナス</span><b>{yen.format(delta.line)}</b></p><p><span>ディレクターボーナス</span><b>{yen.format(delta.director)}</b></p><p><span>タイトルボーナス</span><b>{yen.format(delta.title)}</b></p><small>資格・定期購入・組織条件を満たす月の概算</small></section></div><div className="bonus-total"><span>概算振込額の変化<small>既存ボーナスの繰越解消を含む場合があります</small></span><strong>{yen.format(delta.estimatedNet)}</strong></div></details>;
 }
 

@@ -437,7 +437,7 @@ const emptyPlacementBonusDelta = (): PlacementBonusDelta => ({
   oneTime: 0, recurring: 0, gross: 0, estimatedNet: 0
 });
 
-function placementBonusDelta(before: BonusBreakdown, after: BonusBreakdown): PlacementBonusDelta {
+export function compareBonusBreakdowns(before: BonusBreakdown, after: BonusBreakdown): PlacementBonusDelta {
   const start = after.start - before.start;
   const trainer = after.trainer - before.trainer;
   const line = after.line - before.line;
@@ -567,7 +567,7 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
     const simulated = cloneWithCandidate(snapshot, request, placement.id, String(index + 1));
     const afterTitle = evaluateTitle(simulated, root.id);
     const afterBonus = computeBonus(simulated, root.id, request.taxProfile);
-    const bonusDelta = placementBonusDelta(beforeBonus, afterBonus);
+    const bonusDelta = compareBonusBreakdowns(beforeBonus, afterBonus);
     const reasons = [
       `次タイトルの未達条件が${missingCount(beforeTitle)}件から${missingCount(afterTitle)}件になります`,
       `総ボーナス概算が${bonusDelta.gross >= 0 ? "+" : ""}${bonusDelta.gross}円変化します`

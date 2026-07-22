@@ -3,6 +3,7 @@ import { z } from "zod";
 import { previewCsv, validateMemberRelationships, CSV_TEMPLATES, type CsvKind } from "../src/domain/csv";
 import {
   computeBonus,
+  compareBonusBreakdowns,
   applySimulationMembers,
   evaluateTitle,
   evaluateTitleChecklists,
@@ -237,13 +238,24 @@ app.get("/api/v1/members/tree", async (context) => {
 app.get("/api/v1/simulation-organization", async (context) => {
   const workspaceId = context.get("workspaceId");
   const period = await selectedPeriod(context.env.DB, context.req.query("period"));
-  const [snapshot, simulationMembers] = await Promise.all([
+  const [snapshot, simulationMembers, taxProfile] = await Promise.all([
     loadSnapshot(context.env.DB, workspaceId, period),
-    listSimulationMembers(context.env.DB, workspaceId, period)
+    listSimulationMembers(context.env.DB, workspaceId, period),
+    getTaxProfile(context.env.DB, workspaceId)
   ]);
+  const rootMember = snapshot.members.find((member) => member.parentMemberId === null);
+  if (!rootMember) return context.json({ error: "ルート会員が登録されていません" }, 409);
+  const simulatedSnapshot = applySimulationMembers(snapshot, simulationMembers);
+  const actualBonus = computeBonus(snapshot, rootMember.id, taxProfile);
+  const simulatedBonus = computeBonus(simulatedSnapshot, rootMember.id, taxProfile);
   const data: SimulationOrganization = {
-    snapshot: applySimulationMembers(snapshot, simulationMembers),
-    simulationMembers
+    snapshot: simulatedSnapshot,
+    simulationMembers,
+    bonusComparison: {
+      actual: actualBonus,
+      simulated: simulatedBonus,
+      delta: compareBonusBreakdowns(actualBonus, simulatedBonus)
+    }
   };
   return context.json(data);
 });
