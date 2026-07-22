@@ -36,6 +36,8 @@ import {
   memberInsert,
   purchaseInsert,
   simulationMemberInsert,
+  updateMemberDisplayName,
+  updateSimulationMemberDisplayName,
   upsertGoal,
   upsertTaxProfile
 } from "./repository";
@@ -62,7 +64,7 @@ const taxProfileSchema = z.object({
 
 const memberSchema = z.object({
   id: z.string().min(1).max(80).optional(),
-  displayName: z.string().min(1).max(80),
+  displayName: z.string().trim().min(1).max(80),
   parentMemberId: nullableId,
   introducerMemberId: nullableId,
   masterMemberId: nullableId,
@@ -106,6 +108,7 @@ const simulationMemberSchema = z.object({
   course: courseSchema,
   trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null)
 });
+const displayNameSchema = z.object({ displayName: z.string().trim().min(1).max(80) });
 
 const forecastScenarioSchema = z.object({
     id: z.enum(["conservative", "standard", "challenge"]),
@@ -284,11 +287,24 @@ app.delete("/api/v1/simulation-members", async (context) => {
   return context.json({ deleted: result.meta.changes });
 });
 
+app.patch("/api/v1/simulation-members/:id/display-name", async (context) => {
+  const id = z.string().min(1).max(120).parse(context.req.param("id"));
+  const input = await boundedJson(context.req.raw, displayNameSchema);
+  const updated = await updateSimulationMemberDisplayName(context.env.DB, context.get("workspaceId"), id, input.displayName);
+  if (!updated) return context.json({ error: "仮メンバーが見つかりません" }, 404);
+  return context.json({ id, displayName: input.displayName });
+});
+
 app.post("/api/v1/members", async (context) => {
   const input = await boundedJson(context.req.raw, memberSchema);
   const snapshot = await loadSnapshot(context.env.DB, context.get("workspaceId"), input.joinedPeriod);
-  if (input.parentMemberId && !snapshot.members.some((member) => member.id === input.parentMemberId)) {
-    return context.json({ error: "配置親が存在しません" }, 400);
+  const memberIds = new Set(snapshot.members.map((member) => member.id));
+  const references = [input.parentMemberId, input.introducerMemberId, input.masterMemberId, input.trainerMemberId].filter((id): id is string => Boolean(id));
+  if (references.some((id) => !memberIds.has(id))) {
+    return context.json({ error: "配置親、紹介者、マスターID、トレーナーのいずれかが存在しません" }, 400);
+  }
+  if (!input.parentMemberId && snapshot.members.some((member) => member.parentMemberId === null)) {
+    return context.json({ error: "ルート会員はすでに登録されています" }, 400);
   }
   if (input.parentMemberId && snapshot.members.filter((member) => member.parentMemberId === input.parentMemberId && member.endedPeriod === null).length >= planConfig.firstLineLimit) {
     return context.json({ error: "配置親の1次ラインが上限7名です" }, 400);
@@ -303,6 +319,14 @@ app.post("/api/v1/members", async (context) => {
   };
   await memberInsert(context.env.DB, member).run();
   return context.json(member, 201);
+});
+
+app.patch("/api/v1/members/:id/display-name", async (context) => {
+  const id = z.string().min(1).max(80).parse(context.req.param("id"));
+  const input = await boundedJson(context.req.raw, displayNameSchema);
+  const updated = await updateMemberDisplayName(context.env.DB, context.get("workspaceId"), id, input.displayName);
+  if (!updated) return context.json({ error: "メンバーが見つかりません" }, 404);
+  return context.json({ id, displayName: input.displayName });
 });
 
 app.get("/api/v1/products", (context) => context.json({ planVersion: planConfig.version, products: planConfig.products }));

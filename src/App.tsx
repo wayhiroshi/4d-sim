@@ -143,7 +143,24 @@ function Organization() {
   const [busy, setBusy] = useState(false);
   const snapshot = data?.snapshot ?? null;
   const trialIds = useMemo(() => new Set(data?.simulationMembers.map((member) => member.id) ?? []), [data]);
+  const actualMembers = snapshot?.members.filter((member) => !trialIds.has(member.id) && member.endedPeriod === null) ?? [];
+  const rootMember = actualMembers.find((member) => member.parentMemberId === null) ?? actualMembers[0] ?? null;
   const selected = snapshot?.members.find((member) => member.id === selectedId) ?? snapshot?.members[0] ?? null;
+  const addMember = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); if (!snapshot || !rootMember) return;
+    const form = event.currentTarget; const values = new FormData(form); setBusy(true); setMessage(null);
+    try {
+      const member = await api.createMember({
+        displayName: String(values.get("name")), parentMemberId: String(values.get("parent")),
+        introducerMemberId: String(values.get("introducer")), masterMemberId: null, trainerMemberId: null,
+        idKind: "master", course: String(values.get("course")) as CourseCode, title: "NONE",
+        trainerCredential: "NONE", sponsorLicense: false, directorPromotedPeriod: null,
+        joinedPeriod: snapshot.period, endedPeriod: null
+      });
+      form.reset(); setSelectedId(member.id); setMessage(`${member.displayName}をNavigator内の実組織へ追加しました`); reload();
+    } catch (reason) { setMessage(reason instanceof Error ? reason.message : "追加できませんでした"); }
+    finally { setBusy(false); }
+  };
   const addTrial = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!snapshot) return;
@@ -172,7 +189,16 @@ function Organization() {
     finally { setBusy(false); }
   };
   return <PageState loading={loading} error={error}>{data && <>
-    <PageHeading kicker="ORGANIZATION" title="組織ツリー" description="実組織に仮メンバーを重ねて、複数人の配置を試算します" />
+    <PageHeading kicker="ORGANIZATION" title="組織ツリー" description="公式CSVがなくても、表示名と配置を手入力して組織を作れます" />
+    <form className="panel manual-member-form" onSubmit={(event) => void addMember(event)}>
+      <div className="manual-member-heading"><p className="eyebrow">APP MEMBER</p><h2>実メンバーを手動追加</h2><p>公式会員IDは不要です。会員サイトのスクショを見ながら入力でき、画像自体はNavigatorへ保存しません。</p></div>
+      <label>アプリ内表示名<input name="name" required maxLength={80} placeholder="例：山田さん、Aさん" /></label>
+      <label>コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label>
+      <label>配置先<select name="parent" defaultValue={rootMember?.id}>{actualMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>
+      <label>紹介者<select name="introducer" defaultValue={rootMember?.id}>{actualMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>
+      <button className="primary-button" disabled={busy || !rootMember}>{busy ? "追加中…" : "実組織へ追加"}</button>
+      <p className="manual-member-note">この操作はNavigator内だけに保存され、フォーデイズ公式サイトの登録・配置は変更しません。</p>
+    </form>
     <section className="trial-banner"><div><strong>試算中 {data.simulationMembers.length}人</strong><small>点線のカードは仮メンバーです。実際の登録データには反映されません。</small></div>{data.simulationMembers.length > 0 && <button className="text-button danger-text" disabled={busy} onClick={() => void clearTrials()}>仮メンバーを全削除</button>}</section>
     <form className="panel trial-form" onSubmit={(event) => void addTrial(event)}>
       <div><p className="eyebrow">MANUAL TRIAL</p><h2>仮メンバーを手動追加</h2></div>
@@ -187,7 +213,7 @@ function Organization() {
       <section className="panel tree-panel">
         {snapshot?.members.filter((member) => member.parentMemberId === null).map((root) => <TreeNode key={root.id} member={root} snapshot={snapshot} simulationIds={trialIds} depth={0} selectedId={selected?.id ?? null} onSelect={setSelectedId} />)}
       </section>
-      {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} />}
+      {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} onRenamed={(displayName) => { setMessage(`表示名を「${displayName}」へ変更しました`); reload(); }} />}
     </div>
   </>}</PageState>;
 }
@@ -206,9 +232,18 @@ function TreeNode({ member, snapshot, simulationIds, depth, selectedId, onSelect
   </div>;
 }
 
-function MemberDetail({ member, snapshot, simulation = false }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean }) {
+function MemberDetail({ member, snapshot, simulation = false, onRenamed }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean; onRenamed: (displayName: string) => void }) {
   const purchases = snapshot.purchases.filter((purchase) => purchase.memberId === member.id).slice(-5).reverse();
-  return <aside className={`panel member-detail${simulation ? " simulation-detail" : ""}`}><p className="eyebrow">{simulation ? "TRIAL MEMBER" : "MEMBER DETAIL"}</p><h2>{member.displayName}{simulation && <em className="trial-tag">仮</em>}</h2>
+  const [editing, setEditing] = useState(false); const [displayName, setDisplayName] = useState(member.displayName); const [saving, setSaving] = useState(false); const [renameError, setRenameError] = useState<string | null>(null);
+  useEffect(() => { setDisplayName(member.displayName); setEditing(false); setRenameError(null); }, [member.id, member.displayName]);
+  const rename = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const nextName = displayName.trim(); if (!nextName) return; setSaving(true); setRenameError(null);
+    try { if (simulation) await api.renameSimulationMember(member.id, nextName); else await api.renameMember(member.id, nextName); setEditing(false); onRenamed(nextName); }
+    catch (reason) { setRenameError(reason instanceof Error ? reason.message : "変更できませんでした"); }
+    finally { setSaving(false); }
+  };
+  return <aside className={`panel member-detail${simulation ? " simulation-detail" : ""}`}><p className="eyebrow">{simulation ? "TRIAL MEMBER" : "MEMBER DETAIL"}</p><div className="member-name-heading"><h2>{member.displayName}{simulation && <em className="trial-tag">仮</em>}</h2><button className="text-button" onClick={() => setEditing((current) => !current)}>{editing ? "閉じる" : "表示名を編集"}</button></div>
+    {editing && <form className="rename-form" onSubmit={(event) => void rename(event)}><label>アプリ内表示名<input autoFocus value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label><button className="secondary-button" disabled={saving || !displayName.trim()}>{saving ? "保存中…" : "保存"}</button>{renameError && <p className="form-error">{renameError}</p>}</form>}
     {simulation && <p className="trial-note">試算中だけ存在する仮メンバーです。初回・リピート相当を各1件として計算し、公式登録・実組織には反映されません。</p>}
     <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>タイトル</dt><dd>{member.title}</dd></div><div><dt>ID種別</dt><dd>{member.idKind === "master" ? "マスター" : "サブ"}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div>{simulation && <div><dt>Aさん役</dt><dd>{TRAINER_ROLE_OPTIONS.find((option) => option.value === (member.trainerBonusRole ?? ""))?.label ?? "担当なし"}</dd></div>}</dl>
     <h3>購入履歴</h3>{purchases.length ? purchases.map((purchase) => <div className="history-row" key={purchase.id}><span>{purchase.period} · {purchase.kind}</span><strong>{number.format(purchase.pv)} p.v.</strong></div>) : <p className="muted">履歴はありません</p>}

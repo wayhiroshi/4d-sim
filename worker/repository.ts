@@ -149,6 +149,20 @@ export async function deleteSavedForecast(db: D1Database, workspaceId: string, i
   return result.meta.changes;
 }
 
+export async function updateMemberDisplayName(db: D1Database, workspaceId: string, id: string, displayName: string): Promise<number> {
+  const result = await db.prepare(
+    "UPDATE members SET display_name = ?, updated_at = CURRENT_TIMESTAMP WHERE workspace_id = ? AND id = ?"
+  ).bind(displayName, workspaceId, id).run();
+  return result.meta.changes;
+}
+
+export async function updateSimulationMemberDisplayName(db: D1Database, workspaceId: string, id: string, displayName: string): Promise<number> {
+  const result = await db.prepare(
+    "UPDATE simulation_members SET display_name = ? WHERE workspace_id = ? AND id = ?"
+  ).bind(displayName, workspaceId, id).run();
+  return result.meta.changes;
+}
+
 export const simulationMemberInsert = (db: D1Database, member: SimulationMember): D1PreparedStatement => db.prepare(
   "INSERT INTO simulation_members (id, workspace_id, display_name, parent_member_id, introducer_member_id, trainer_member_id, trainer_bonus_role, course, period, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 ).bind(
