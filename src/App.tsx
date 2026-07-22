@@ -226,16 +226,19 @@ function TrialBonusSummary({ comparison, count }: { comparison: SimulationOrgani
 }
 
 function TreeNode({ member, snapshot, simulationIds, depth, selectedId, onSelect }: { member: Member; snapshot: OrganizationSnapshot; simulationIds: Set<string>; depth: number; selectedId: string | null; onSelect: (id: string) => void }) {
+  const [expanded, setExpanded] = useState(true);
   const children = snapshot.members.filter((item) => item.parentMemberId === member.id);
+  const childrenId = `tree-children-${member.id}`;
   const pv = snapshot.purchases
     .filter((purchase) => purchase.memberId === member.id && purchase.period === snapshot.period)
     .filter((purchase) => !simulationIds.has(member.id) || purchase.kind !== "initial")
     .reduce((sum, purchase) => sum + purchase.pv * purchase.quantity, 0);
   return <div className="tree-branch" style={{ "--depth": depth } as React.CSSProperties}>
-    <button className={`member-node${selectedId === member.id ? " selected" : ""}${simulationIds.has(member.id) ? " simulation" : ""}`} onClick={() => onSelect(member.id)}>
-      <span className={`course course-${member.course}`}>{member.course}</span><span><strong>{member.displayName}{simulationIds.has(member.id) && <em className="trial-tag">仮</em>}</strong><small>{number.format(pv)} p.v. · {member.title}</small></span>
+    <button className={`member-node${selectedId === member.id ? " selected" : ""}${simulationIds.has(member.id) ? " simulation" : ""}`} aria-expanded={children.length > 0 ? expanded : undefined} aria-controls={children.length > 0 ? childrenId : undefined} onClick={() => { onSelect(member.id); if (children.length > 0) setExpanded((current) => !current); }}>
+      <span className={`course course-${member.course}`}>{member.course}</span><span className="member-node-content"><strong>{member.displayName}{simulationIds.has(member.id) && <em className="trial-tag">仮</em>}</strong><small>{number.format(pv)} p.v. · {member.title}</small></span>
+      {children.length > 0 && <span className={`tree-toggle${expanded ? " expanded" : ""}`} aria-hidden="true"><small>{children.length}人</small><b>⌄</b></span>}
     </button>
-    {children.length > 0 && <div className="tree-children">{children.map((child) => <TreeNode key={child.id} member={child} snapshot={snapshot} simulationIds={simulationIds} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />)}</div>}
+    {children.length > 0 && expanded && <div className="tree-children" id={childrenId}>{children.map((child) => <TreeNode key={child.id} member={child} snapshot={snapshot} simulationIds={simulationIds} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />)}</div>}
   </div>;
 }
 
