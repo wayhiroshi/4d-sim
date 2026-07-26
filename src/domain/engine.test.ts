@@ -4,6 +4,7 @@ import {
   compareBonusBreakdowns,
   applySimulationMembers,
   computeLineBonus,
+  computeShoppingMallInvitationEstimate,
   evaluateTitle,
   evaluateTitleChecklists,
   generateMissions,
@@ -61,6 +62,53 @@ describe("official golden line bonus cases", () => {
       [purchase("r", "root", 10670), purchase("a", "a", 5330)]
     );
     expect(computeLineBonus(data, "root")).toBe(800);
+  });
+});
+
+describe("shopping mall invitation estimate", () => {
+  it.each(["A", "B", "F", "G", "I"] as const)(
+    "uses the title-none first-line rate for %s course",
+    (course) => {
+      expect(computeShoppingMallInvitationEstimate({
+        productCode: "SHOP-005510",
+        course,
+        title: "NONE",
+        orders: 1,
+        includeIssueFee: false
+      })).toMatchObject({
+        standardPvPerOrder: 5330,
+        firstLineRate: 0.15,
+        salesBonusPerOrder: 2890,
+        pvBonusPerOrder: 800,
+        grossBonusPerOrder: 3690,
+        grossBonus: 3690
+      });
+    }
+  );
+
+  it("calculates the 120-order annual plan and one-time issue fee", () => {
+    expect(computeShoppingMallInvitationEstimate({
+      productCode: "SHOP-005510",
+      course: "A",
+      title: "NONE",
+      orders: 120
+    })).toMatchObject({
+      creditedPv: 639600,
+      salesBonus: 346800,
+      pvBonus: 96000,
+      grossBonus: 442800,
+      issueFee: 1100,
+      afterIssueFee: 441700
+    });
+  });
+
+  it("rejects fractional order counts", () => {
+    expect(() => computeShoppingMallInvitationEstimate({
+      productCode: "SHOP-005510",
+      course: "A",
+      title: "NONE",
+      orders: 1.5
+    })).toThrow("Orders must be a non-negative integer");
   });
 });
 

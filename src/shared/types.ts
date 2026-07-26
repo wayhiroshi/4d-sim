@@ -41,6 +41,18 @@ export interface TitleRule {
   requiredDirectTitleCount: number;
 }
 
+export interface ShoppingMallProductRule {
+  code: string;
+  memberProductCode: string;
+  name: string;
+  normalPrice: number;
+  memberPrice: number;
+  standardPv: number;
+  priceVerifiedOn: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+}
+
 export interface PlanConfig {
   planId: string;
   version: string;
@@ -67,11 +79,37 @@ export interface PlanConfig {
     pattern2ExcludesSevenOrMoreIds: boolean;
   };
   lineRatesByTitle: Partial<Record<TitleCode, Partial<Record<CourseCode, number[]>>>>;
+  shoppingMallInvitation: {
+    effectiveFrom: string;
+    issueFeePerId: number;
+    maxUplineDepth: number;
+    creditDelayDays: number;
+    products: ShoppingMallProductRule[];
+  };
   tax: {
     paymentCarryoverThreshold: number;
     invoiceTransitions: Array<{ from: string; to: string; disallowedInputTaxRate: number }>;
   };
   sources: Array<{ name: string; revision: string; pages: string }>;
+}
+
+export interface ShoppingMallInvitationEstimate {
+  productCode: string;
+  productName: string;
+  course: CourseCode;
+  title: TitleCode;
+  orders: number;
+  standardPvPerOrder: number;
+  creditedPv: number;
+  firstLineRate: number;
+  salesBonusPerOrder: number;
+  pvBonusPerOrder: number;
+  grossBonusPerOrder: number;
+  salesBonus: number;
+  pvBonus: number;
+  grossBonus: number;
+  issueFee: number;
+  afterIssueFee: number;
 }
 
 export interface Member {

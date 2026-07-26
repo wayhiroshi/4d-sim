@@ -29,6 +29,18 @@ const trainerBonuses = z.object({
   ST_WITH_PT: z.number().int().nonnegative()
 });
 
+const shoppingMallProduct = z.object({
+  code: z.string().min(1),
+  memberProductCode: z.string().min(1),
+  name: z.string().min(1),
+  normalPrice: z.number().nonnegative(),
+  memberPrice: z.number().nonnegative(),
+  standardPv: z.number().nonnegative(),
+  priceVerifiedOn: z.iso.date(),
+  effectiveFrom: z.iso.date(),
+  effectiveTo: z.iso.date().nullable()
+});
+
 const planSchema = z.object({
   planId: z.string().min(1),
   version: z.string().min(1),
@@ -78,6 +90,13 @@ const planSchema = z.object({
     titleCode,
     z.partialRecord(courseCode, z.array(z.number().min(0).max(1)))
   ),
+  shoppingMallInvitation: z.object({
+    effectiveFrom: z.iso.date(),
+    issueFeePerId: z.number().int().nonnegative(),
+    maxUplineDepth: z.number().int().positive(),
+    creditDelayDays: z.number().int().nonnegative(),
+    products: z.array(shoppingMallProduct)
+  }),
   tax: z.object({
     paymentCarryoverThreshold: z.number().nonnegative(),
     invoiceTransitions: z.array(z.object({

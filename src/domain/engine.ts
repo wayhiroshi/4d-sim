@@ -3,6 +3,7 @@ import {
   TITLE_ORDER,
   type BonusBreakdown,
   type ConditionResult,
+  type CourseCode,
   type ForecastResult,
   type ForecastScenario,
   type Member,
@@ -13,6 +14,7 @@ import {
   type PurchaseEvent,
   type SimulationMember,
   type SimulationRequest,
+  type ShoppingMallInvitationEstimate,
   type TaxProfile,
   type TitleCode,
   type TitleChecklistItem,
@@ -281,18 +283,60 @@ export function evaluateTitleChecklists(snapshot: OrganizationSnapshot, rootId: 
   });
 }
 
-function ratesFor(member: Member, evaluatedTitle: TitleCode): number[] {
-  const titleRates = planConfig.lineRatesByTitle[evaluatedTitle]?.[member.course];
+function ratesForCourse(course: CourseCode, evaluatedTitle: TitleCode): number[] {
+  const titleRates = planConfig.lineRatesByTitle[evaluatedTitle]?.[course];
   if (titleRates) return titleRates;
   if (titleAtLeast(evaluatedTitle, "DR")) {
-    const directorRates = planConfig.lineRatesByTitle.DR?.[member.course];
+    const directorRates = planConfig.lineRatesByTitle.DR?.[course];
     if (directorRates) return directorRates;
   }
   if (titleAtLeast(evaluatedTitle, "LD")) {
-    const ldRates = planConfig.lineRatesByTitle.LD?.[member.course];
+    const ldRates = planConfig.lineRatesByTitle.LD?.[course];
     if (ldRates) return ldRates;
   }
-  return planConfig.courses[member.course].baseLineRates;
+  return planConfig.courses[course].baseLineRates;
+}
+
+function ratesFor(member: Member, evaluatedTitle: TitleCode): number[] {
+  return ratesForCourse(member.course, evaluatedTitle);
+}
+
+export function computeShoppingMallInvitationEstimate(options: {
+  productCode: string;
+  course: CourseCode;
+  title: TitleCode;
+  orders: number;
+  includeIssueFee?: boolean;
+}): ShoppingMallInvitationEstimate {
+  if (!Number.isInteger(options.orders) || options.orders < 0) {
+    throw new Error(`Orders must be a non-negative integer: ${options.orders}`);
+  }
+  const product = planConfig.shoppingMallInvitation.products.find((item) => item.code === options.productCode);
+  if (!product) throw new Error(`Shopping mall product not found: ${options.productCode}`);
+  const firstLineRate = ratesForCourse(options.course, options.title)[0] ?? 0;
+  const salesBonusPerOrder = product.normalPrice - product.memberPrice;
+  const pvBonusPerOrder = money(product.standardPv * firstLineRate);
+  const grossBonusPerOrder = salesBonusPerOrder + pvBonusPerOrder;
+  const issueFee = options.includeIssueFee === false ? 0 : planConfig.shoppingMallInvitation.issueFeePerId;
+
+  return {
+    productCode: product.code,
+    productName: product.name,
+    course: options.course,
+    title: options.title,
+    orders: options.orders,
+    standardPvPerOrder: product.standardPv,
+    creditedPv: product.standardPv * options.orders,
+    firstLineRate,
+    salesBonusPerOrder,
+    pvBonusPerOrder,
+    grossBonusPerOrder,
+    salesBonus: salesBonusPerOrder * options.orders,
+    pvBonus: pvBonusPerOrder * options.orders,
+    grossBonus: grossBonusPerOrder * options.orders,
+    issueFee,
+    afterIssueFee: grossBonusPerOrder * options.orders - issueFee
+  };
 }
 
 export function computeLineBonus(snapshot: OrganizationSnapshot, rootId: string, forcedTitle?: TitleCode): number {
