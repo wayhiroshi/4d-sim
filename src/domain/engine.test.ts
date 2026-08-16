@@ -295,8 +295,9 @@ describe("placement simulation", () => {
   });
 
   it("calculates self and partner separately, then ranks by the combined two-person increase", () => {
+    const sub = { ...member("sub", "root"), idKind: "sub" as const, masterMemberId: "root" };
     const data = snapshot(
-      [member("root", null, "G"), member("partner", "root")],
+      [member("root", null, "G"), sub, member("partner", "root")],
       [purchase("root-repeat", "root", 10670), purchase("partner-repeat", "partner", 5330)]
     );
     const original = structuredClone(data);
@@ -308,8 +309,8 @@ describe("placement simulation", () => {
     expect(partnerPlacement?.rank).toBe(1);
     expect(partnerPlacement?.incomeComparison).toMatchObject({
       mode: "pair",
-      self: { memberId: "root", memberName: "root" },
-      partner: { memberId: "partner", memberName: "partner" }
+      self: { memberId: "root", memberName: "root", includedIds: [{ memberId: "root" }, { memberId: "sub" }] },
+      partner: { memberId: "partner", memberName: "partner", includedIds: [{ memberId: "partner" }] }
     });
     expect(partnerPlacement?.incomeComparison.partner?.delta.line).toBe(800);
     expect(partnerPlacement?.incomeComparison.combined.grossDelta).toBe(
@@ -371,6 +372,12 @@ describe("placement simulation", () => {
     ];
     const layered = applySimulationMembers(actual, trials);
     expect(computeBonus(layered, "root", tax).line).toBe(1867);
+    const comparison = simulatePlacements(layered, {
+      candidateName: "追加", course: "A", idKind: "master", period, targetTitle: "LD",
+      placementCandidateIds: ["root"], taxProfile: tax
+    })[0]?.incomeComparison;
+    expect(comparison?.self.includedIds.map((item) => item.memberId)).toEqual(["root", "trial-sub"]);
+    expect(comparison?.combined.grossDelta).toBe(comparison?.self.delta.gross);
 
     const fiveSubs = snapshot([
       member("root", null, "G"),

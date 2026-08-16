@@ -321,6 +321,7 @@ function Simulator() {
   const [candidate, setCandidate] = useState<{ name: string; course: CourseCode; idKind: IdKind; trainerBonusRole: TrainerBonusRole | null } | null>(null);
   const snapshot = tree.data?.snapshot ?? null;
   const rootMember = snapshot?.members.find((member) => member.parentMemberId === null) ?? null;
+  const ownedSubIds = snapshot?.members.filter((member) => member.idKind === "sub" && member.masterMemberId === rootMember?.id && (member.endedPeriod === null || member.endedPeriod > snapshot.period)) ?? [];
   const partnerOptions = snapshot?.members.filter((member) => member.id !== rootMember?.id && member.idKind === "master" && member.masterMemberId === null && (member.endedPeriod === null || member.endedPeriod > snapshot.period) && !member.id.startsWith("trial-")) ?? [];
   const selectedPartnerId = partnerMemberId || partnerOptions[0]?.id || "";
   const storyStartingOptions = snapshot?.members.filter((member) => member.endedPeriod === null || member.endedPeriod > snapshot.period) ?? [];
@@ -417,10 +418,11 @@ function Simulator() {
         {pattern === "optimized" ? <label>Aさん役<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!trainerRoleAvailable(rootMember?.trainerCredential ?? "NONE", option.value)}>{option.label}</option>)}</select><small className="field-note">現在資格：{rootMember?.trainerCredential === "NONE" ? "未取得" : rootMember?.trainerCredential}</small></label> : <div className="story-condition"><span>一時ボーナス</span><strong>含めない</strong><small>8段到達時の継続報酬を試算します</small></div>}
       </section>
 
-      <header className="simulator-workflow-heading"><div><span>3</span><div><strong>収入の集計範囲</strong><small>自分だけ、または2名合算を選びます</small></div></div></header>
+      <header className="simulator-workflow-heading"><div><span>3</span><div><strong>収入の集計範囲</strong><small>本人のサブIDは自動合算し、必要ならパートナーも加えます</small></div></div></header>
       <section className="simulator-step-grid simulator-income-settings">
-        <label>収入の見方<select value={incomeMode} onChange={(event) => { setIncomeMode(event.target.value as "self" | "pair"); clearResults(); }}><option value="self">自分のみ</option><option value="pair">自分＋パートナー（2名合算）</option></select></label>
-        {incomeMode === "pair" && <label>合算するパートナー<select value={selectedPartnerId} disabled={!partnerOptions.length} onChange={(event) => { setPartnerMemberId(event.target.value); clearResults(); }}>{partnerOptions.length ? partnerOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}（{member.course}）</option>) : <option value="">対象メンバーがいません</option>}</select><small className="field-note">各人の報酬を個別計算して合算</small></label>}
+        <label>収入の見方<select value={incomeMode} onChange={(event) => { setIncomeMode(event.target.value as "self" | "pair"); clearResults(); }}><option value="self">自分＋保有サブID</option><option value="pair">自分＋保有サブID＋パートナー</option></select></label>
+        {incomeMode === "pair" && <label>合算するパートナー<select value={selectedPartnerId} disabled={!partnerOptions.length} onChange={(event) => { setPartnerMemberId(event.target.value); clearResults(); }}>{partnerOptions.length ? partnerOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}（{member.course}）</option>) : <option value="">対象メンバーがいません</option>}</select><small className="field-note">本人側はサブIDをまとめて計算し、パートナーとは個別計算後に合算</small></label>}
+        <div className="income-includes"><span>本人収入へ合算するID</span><strong>{rootMember?.displayName ?? "本人"}（メイン）</strong>{ownedSubIds.length ? ownedSubIds.map((member) => <small key={member.id}>{member.displayName}（{member.course}・サブ）</small>) : <small>登録済みサブIDなし</small>}<em>同じサブIDを別枠で足さないため、二重計上しません</em></div>
       </section>
 
       <footer className="simulator-submit"><div><strong>{pattern === "three-by-three" ? "3人ずつ増える未来を8段まで試算" : pattern === "one-by-one" ? "1人ずつつながる未来を8段まで試算" : candidateCount === 1 ? "1人の配置候補を比較" : `${candidateCount}人を順番に効率配置`}</strong><small>{pattern === "optimized" ? "計算しただけでは試算組織へ保存されません" : "遠い未来の条件付き試算として表示し、組織へは保存しません"}</small></div><button className="primary-button" disabled={busy || (incomeMode === "pair" && !selectedPartnerId) || (pattern !== "optimized" && !selectedStartingMemberId)}>{busy ? "全配置を計算中…" : pattern === "optimized" ? "配置を計算する" : "8段の未来を計算する"}</button></footer>
@@ -440,14 +442,24 @@ function Simulator() {
 
 function RewardAmount({ comparison, focus, longTerm = false }: { comparison: PlacementResult["incomeComparison"]; focus: RewardFocus; longTerm?: boolean }) {
   const delta = focus === "line" ? lineDeltaFor(comparison) : comparison.combined.grossDelta;
-  const label = focus === "line" ? (comparison.mode === "pair" ? "2名合計・ライン差" : "継続ライン差") : longTerm ? (comparison.mode === "pair" ? "2名合計・継続報酬差" : "継続報酬の差") : (comparison.mode === "pair" ? "2名合計・登録月差" : "登録月の総額差");
+  const label = focus === "line" ? (comparison.mode === "pair" ? "全ID合計・ライン差" : "保有ID合計・ライン差") : longTerm ? (comparison.mode === "pair" ? "全ID合計・継続報酬差" : "保有ID合計・継続報酬差") : (comparison.mode === "pair" ? "全ID合計・登録月差" : "保有ID合計・登録月差");
   return <div className="placement-amount"><small>{label}</small><strong className={delta >= 0 ? "positive" : "negative"}>{delta >= 0 ? "+" : ""}{yen.format(delta)}</strong></div>;
 }
 
 function FocusedIncomeBreakdown({ comparison, focus }: { comparison: PlacementResult["incomeComparison"]; focus: RewardFocus }) {
-  if (focus === "registration") return comparison.mode === "pair" ? <PairIncomeBreakdown comparison={comparison} focus={focus} /> : null;
+  if (focus === "registration") return comparison.mode === "pair" ? <PairIncomeBreakdown comparison={comparison} focus={focus} /> : <OwnedIdSummary owner={comparison.self} />;
   if (comparison.mode === "pair") return <PairIncomeBreakdown comparison={comparison} focus={focus} />;
-  return <section className="line-income-focus"><div><strong>ラインボーナスのみ</strong><small>一時・ディレクター・タイトルボーナスを含みません</small></div><p><span>{yen.format(comparison.self.before.line)} → {yen.format(comparison.self.after.line)}</span><b className={comparison.self.delta.line >= 0 ? "positive" : "negative"}>{comparison.self.delta.line >= 0 ? "+" : ""}{yen.format(comparison.self.delta.line)}</b></p></section>;
+  return <section className="line-income-focus"><div><strong>ラインボーナスのみ</strong><small>一時・ディレクター・タイトルボーナスを含みません</small><IncomeIdList owner={comparison.self} /></div><p><span>{yen.format(comparison.self.before.line)} → {yen.format(comparison.self.after.line)}</span><b className={comparison.self.delta.line >= 0 ? "positive" : "negative"}>{comparison.self.delta.line >= 0 ? "+" : ""}{yen.format(comparison.self.delta.line)}</b></p></section>;
+}
+
+function IncomeIdList({ owner }: { owner: PlacementResult["incomeComparison"]["self"] }) {
+  const subIds = owner.includedIds.filter((member) => member.idKind === "sub");
+  return <small className="income-id-list">合算ID：{owner.memberName}（メイン）{subIds.map((member) => ` ＋ ${member.memberName}（サブ）`).join("")}</small>;
+}
+
+function OwnedIdSummary({ owner }: { owner: PlacementResult["incomeComparison"]["self"] }) {
+  if (owner.includedIds.length <= 1) return null;
+  return <section className="owned-id-summary"><strong>本人の保有IDを合算済み</strong><IncomeIdList owner={owner} /><small>税・控除は合算後に1回だけ適用します</small></section>;
 }
 
 function PairIncomeBreakdown({ comparison, focus = "registration" }: { comparison: PlacementResult["incomeComparison"]; focus?: RewardFocus }) {
@@ -455,9 +467,9 @@ function PairIncomeBreakdown({ comparison, focus = "registration" }: { compariso
   if (focus === "line") {
     const before = owners.reduce((sum, owner) => sum + owner.before.line, 0);
     const after = owners.reduce((sum, owner) => sum + owner.after.line, 0);
-    return <section className="pair-income"><div className="pair-income-heading"><strong>2名のラインボーナス</strong><small>一時ボーナスを除外</small></div>{owners.map((owner) => <div className="pair-income-row" key={owner.memberId}><div><strong>{owner.memberName}</strong><small>ライン {yen.format(owner.before.line)} → {yen.format(owner.after.line)}</small></div><b className={owner.delta.line >= 0 ? "positive" : "negative"}>{owner.delta.line >= 0 ? "+" : ""}{yen.format(owner.delta.line)}</b></div>)}<div className="pair-income-total"><div><strong>2名合計</strong><small>ライン {yen.format(before)} → {yen.format(after)}</small></div><b className={after - before >= 0 ? "positive" : "negative"}>{after - before >= 0 ? "+" : ""}{yen.format(after - before)}</b></div></section>;
+    return <section className="pair-income"><div className="pair-income-heading"><strong>本人の保有ID＋パートナーのラインボーナス</strong><small>一時ボーナスを除外</small></div>{owners.map((owner) => <div className="pair-income-row" key={owner.memberId}><div><strong>{owner.memberName}</strong><IncomeIdList owner={owner} /><small>ライン {yen.format(owner.before.line)} → {yen.format(owner.after.line)}</small></div><b className={owner.delta.line >= 0 ? "positive" : "negative"}>{owner.delta.line >= 0 ? "+" : ""}{yen.format(owner.delta.line)}</b></div>)}<div className="pair-income-total"><div><strong>全ID合計</strong><small>ライン {yen.format(before)} → {yen.format(after)}</small></div><b className={after - before >= 0 ? "positive" : "negative"}>{after - before >= 0 ? "+" : ""}{yen.format(after - before)}</b></div></section>;
   }
-  return <section className="pair-income"><div className="pair-income-heading"><strong>2名の収入内訳</strong><small>各人を個別計算して合算</small></div>{owners.map((owner) => <div className="pair-income-row" key={owner.memberId}><div><strong>{owner.memberName}</strong><small>総ボーナス {yen.format(owner.before.gross)} → {yen.format(owner.after.gross)}</small><small>概算振込 {yen.format(owner.before.estimatedNet)} → {yen.format(owner.after.estimatedNet)}</small></div><b className={owner.delta.gross >= 0 ? "positive" : "negative"}>{owner.delta.gross >= 0 ? "+" : ""}{yen.format(owner.delta.gross)}</b></div>)}<div className="pair-income-total"><div><strong>2名合計</strong><small>総ボーナス {yen.format(comparison.combined.beforeGross)} → {yen.format(comparison.combined.afterGross)}</small><small>概算振込 {yen.format(comparison.combined.beforeEstimatedNet)} → {yen.format(comparison.combined.afterEstimatedNet)}</small></div><b className={comparison.combined.grossDelta >= 0 ? "positive" : "negative"}>{comparison.combined.grossDelta >= 0 ? "+" : ""}{yen.format(comparison.combined.grossDelta)}</b></div></section>;
+  return <section className="pair-income"><div className="pair-income-heading"><strong>本人の保有ID＋パートナーの収入内訳</strong><small>本人のサブIDはまとめ、パートナーとは個別計算後に合算</small></div>{owners.map((owner) => <div className="pair-income-row" key={owner.memberId}><div><strong>{owner.memberName}</strong><IncomeIdList owner={owner} /><small>総ボーナス {yen.format(owner.before.gross)} → {yen.format(owner.after.gross)}</small><small>概算振込 {yen.format(owner.before.estimatedNet)} → {yen.format(owner.after.estimatedNet)}</small></div><b className={owner.delta.gross >= 0 ? "positive" : "negative"}>{owner.delta.gross >= 0 ? "+" : ""}{yen.format(owner.delta.gross)}</b></div>)}<div className="pair-income-total"><div><strong>全ID合計</strong><small>総ボーナス {yen.format(comparison.combined.beforeGross)} → {yen.format(comparison.combined.afterGross)}</small><small>概算振込 {yen.format(comparison.combined.beforeEstimatedNet)} → {yen.format(comparison.combined.afterEstimatedNet)}</small></div><b className={comparison.combined.grossDelta >= 0 ? "positive" : "negative"}>{comparison.combined.grossDelta >= 0 ? "+" : ""}{yen.format(comparison.combined.grossDelta)}</b></div></section>;
 }
 
 function BonusBreakdownDetails({ result }: { result: PlacementResult }) {
