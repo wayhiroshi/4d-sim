@@ -42,8 +42,10 @@ import {
   purchaseInsert,
   simulationMemberInsert,
   updateMemberDisplayName,
+  updateMemberIdentity,
   updateMemberTrainerProfile,
   updateSimulationMemberDisplayName,
+  updateSimulationMemberIdentity,
   upsertGoal,
   upsertTaxProfile
 } from "./repository";
@@ -149,6 +151,11 @@ const batchSimulationMemberSchema = z.object({
   })).min(1).max(20)
 });
 const displayNameSchema = z.object({ displayName: z.string().trim().min(1).max(80) });
+const memberIdentitySchema = z.object({
+  displayName: z.string().trim().min(1).max(80),
+  idKind: z.enum(["master", "sub"])
+});
+const simulationMemberIdentitySchema = memberIdentitySchema.extend({ period: periodSchema });
 const trainerProfileSchema = z.object({
   trainerCredential: z.enum(["NONE", "PT", "ST"]),
   sponsorLicense: z.boolean(),
@@ -433,6 +440,32 @@ app.patch("/api/v1/simulation-members/:id/display-name", async (context) => {
   return context.json({ id, displayName: input.displayName });
 });
 
+app.patch("/api/v1/simulation-members/:id/identity", async (context) => {
+  const id = z.string().min(1).max(120).parse(context.req.param("id"));
+  const input = await boundedJson(context.req.raw, simulationMemberIdentitySchema);
+  const workspaceId = context.get("workspaceId");
+  const [snapshot, simulationMembers] = await Promise.all([
+    loadSnapshot(context.env.DB, workspaceId, input.period),
+    listSimulationMembers(context.env.DB, workspaceId, input.period)
+  ]);
+  const root = snapshot.members.find((member) => member.parentMemberId === null);
+  const member = simulationMembers.find((item) => item.id === id);
+  if (!root) return context.json({ error: "本人のマスターIDが見つかりません" }, 400);
+  if (!member) return context.json({ error: "仮メンバーが見つかりません" }, 404);
+  const organization = applySimulationMembers(snapshot, simulationMembers);
+  const otherSubIds = organization.members.filter((item) => item.id !== id && item.idKind === "sub" && item.masterMemberId === root.id).length;
+  if (input.idKind === "sub" && otherSubIds >= planConfig.maxSubIdsPerMaster) {
+    return context.json({ error: `自分のサブIDは通常${planConfig.maxSubIdsPerMaster}件までです` }, 400);
+  }
+  const updated = await updateSimulationMemberIdentity(
+    context.env.DB, workspaceId, id, input.displayName, input.idKind,
+    input.idKind === "sub" ? root.id : null,
+    input.idKind === "sub" ? root.id : member.introducerMemberId
+  );
+  if (!updated) return context.json({ error: "仮メンバーが見つかりません" }, 404);
+  return context.json({ id, displayName: input.displayName, idKind: input.idKind });
+});
+
 app.post("/api/v1/members", async (context) => {
   const input = await boundedJson(context.req.raw, memberSchema);
   const snapshot = await loadSnapshot(context.env.DB, context.get("workspaceId"), input.joinedPeriod);
@@ -478,6 +511,34 @@ app.patch("/api/v1/members/:id/display-name", async (context) => {
   const updated = await updateMemberDisplayName(context.env.DB, context.get("workspaceId"), id, input.displayName);
   if (!updated) return context.json({ error: "メンバーが見つかりません" }, 404);
   return context.json({ id, displayName: input.displayName });
+});
+
+app.patch("/api/v1/members/:id/identity", async (context) => {
+  const id = z.string().min(1).max(80).parse(context.req.param("id"));
+  const input = await boundedJson(context.req.raw, memberIdentitySchema);
+  const workspaceId = context.get("workspaceId");
+  const snapshot = await loadSnapshot(context.env.DB, workspaceId, await selectedPeriod(context.env.DB, undefined));
+  const root = snapshot.members.find((member) => member.parentMemberId === null);
+  const member = snapshot.members.find((item) => item.id === id);
+  if (!root) return context.json({ error: "本人のマスターIDが見つかりません" }, 400);
+  if (!member) return context.json({ error: "メンバーが見つかりません" }, 404);
+  if (member.id === root.id && input.idKind === "sub") {
+    return context.json({ error: "本人のルートIDはマスターIDから変更できません" }, 400);
+  }
+  if (input.idKind === "sub" && snapshot.members.some((item) => item.masterMemberId === member.id && item.idKind === "sub")) {
+    return context.json({ error: "サブIDを所有しているメンバーはサブIDへ変更できません" }, 400);
+  }
+  const otherSubIds = snapshot.members.filter((item) => item.id !== id && item.idKind === "sub" && item.masterMemberId === root.id).length;
+  if (input.idKind === "sub" && otherSubIds >= planConfig.maxSubIdsPerMaster) {
+    return context.json({ error: `自分のサブIDは通常${planConfig.maxSubIdsPerMaster}件までです` }, 400);
+  }
+  const updated = await updateMemberIdentity(
+    context.env.DB, workspaceId, id, input.displayName, input.idKind,
+    input.idKind === "sub" ? root.id : null,
+    input.idKind === "sub" ? root.id : member.introducerMemberId
+  );
+  if (!updated) return context.json({ error: "メンバーが見つかりません" }, 404);
+  return context.json({ id, displayName: input.displayName, idKind: input.idKind });
 });
 
 app.patch("/api/v1/members/:id/trainer-profile", async (context) => {
