@@ -7,6 +7,7 @@ import {
   computeShoppingMallInvitationEstimate,
   evaluateTitle,
   evaluateTitleChecklists,
+  evaluateTrainerQualificationChecklists,
   generateMissions,
   groupPv,
   periodForDate,
@@ -23,7 +24,9 @@ function member(id: string, parentMemberId: string | null, course: CourseCode = 
     id, workspaceId: "test", displayName: id, parentMemberId,
     introducerMemberId: id === "root" ? null : introducerMemberId,
     masterMemberId: null, trainerMemberId: null, idKind: "master", course,
-    title: "NONE", trainerCredential: "NONE", sponsorLicense: false, directorPromotedPeriod: null,
+    title: "NONE", trainerCredential: "NONE", sponsorLicense: false,
+    openStudioAttendances: 0, preTrainerCourseCompleted: false, preTrainerKitPurchased: false,
+    startTrainerCourseCompleted: false, startTrainerKitPurchased: false, directorPromotedPeriod: null,
     joinedPeriod: period, endedPeriod: null
   };
 }
@@ -118,13 +121,20 @@ describe("trainer bonus", () => {
     ["G", "PT", 1680], ["G", "ST_SOLO", 5450], ["G", "ST_WITH_PT", 3770],
     ["I", "PT", 670], ["I", "ST_SOLO", 0], ["I", "ST_WITH_PT", 0]
   ] as const)("calculates %s course %s support as %i yen", (course, trainerBonusRole, expected) => {
-    const root = member("root", null, "G");
+    const root = { ...member("root", null, "G"), trainerCredential: (trainerBonusRole === "PT" ? "PT" : "ST") as Member["trainerCredential"] };
     const candidate = { ...member("candidate", "root", course), trainerMemberId: "root", trainerBonusRole };
     const data = snapshot(
       [root, candidate],
       [purchase("root-repeat", "root", 10670), purchase("candidate-initial", "candidate", course === "G" ? 10670 : course === "I" ? 2660 : 5330, "initial")]
     );
     expect(computeBonus(data, "root", tax).trainer).toBe(expected);
+  });
+
+  it("does not add a trainer bonus when the recorded qualification is missing", () => {
+    const root = member("root", null, "G");
+    const candidate = { ...member("candidate", "root"), trainerMemberId: "root", trainerBonusRole: "PT" as const };
+    const data = snapshot([root, candidate], [purchase("root", "root", 10670), purchase("candidate", "candidate", 5330, "initial")]);
+    expect(computeBonus(data, "root", tax).trainer).toBe(0);
   });
 });
 
@@ -271,7 +281,8 @@ describe("estimated payment", () => {
 
 describe("placement simulation", () => {
   it("separates one-time and recurring deltas and includes the selected trainer role", () => {
-    const data = snapshot([member("root", null, "G")], [purchase("root", "root", 10670)]);
+    const root = { ...member("root", null, "G"), trainerCredential: "PT" as const };
+    const data = snapshot([root], [purchase("root", "root", 10670)]);
     const result = simulatePlacements(data, {
       candidateName: "候補", course: "A", idKind: "master", trainerBonusRole: "PT", period, targetTitle: "LD",
       placementCandidateIds: ["root"], taxProfile: tax
@@ -294,7 +305,8 @@ describe("placement simulation", () => {
   });
 
   it("layers multiple saved trial members without changing the actual organization", () => {
-    const actual = snapshot([member("root", null, "G")], [purchase("p-root", "root", 10670)]);
+    const root = { ...member("root", null, "G"), trainerCredential: "PT" as const };
+    const actual = snapshot([root], [purchase("p-root", "root", 10670)]);
     const original = structuredClone(actual);
     const trials: SimulationMember[] = [
       { id: "trial-1", workspaceId: "test", displayName: "仮1", parentMemberId: "root", introducerMemberId: "root", masterMemberId: null, trainerMemberId: "root", trainerBonusRole: "PT", idKind: "master", course: "A", period, createdAt: "2026-07-22T00:00:01Z" },
@@ -363,9 +375,48 @@ describe("simulation checks", () => {
     expect(director?.alternatives).toBeUndefined();
     expect(director?.conditions.some((condition) => condition.key === "director-maintenance")).toBe(true);
   });
+
+  it("shows the official P and S trainer acquisition conditions and progress", () => {
+    const root = {
+      ...member("root", null, "G"), sponsorLicense: true, openStudioAttendances: 1,
+      preTrainerCourseCompleted: true, preTrainerKitPurchased: true
+    };
+    const first = { ...member("first", "root"), title: "LD" as const };
+    const members = [root, first, member("second", "root"), member("third", "root"), member("first-child", "first"), member("second-child", "second")];
+    const data = snapshot(members, members.map((item) => purchase(`p-${item.id}`, item.id, item.course === "G" ? 10670 : 5330)));
+    const [pre, start] = evaluateTrainerQualificationChecklists(data, "root");
+    expect(pre).toMatchObject({ code: "PT", label: "プレ・トレーナー", status: "next", progress: 100 });
+    expect(pre?.conditions.map((condition) => condition.label)).toContain("直紹介者数（サブIDを除く）");
+    expect(start).toMatchObject({ code: "ST", status: "future" });
+    expect(start?.conditions.find((condition) => condition.key === "ST-trainer")?.met).toBe(false);
+
+    const qualified = snapshot([
+      { ...root, trainerCredential: "PT", openStudioAttendances: 3, startTrainerCourseCompleted: true, startTrainerKitPurchased: true },
+      ...members.slice(1)
+    ], data.purchases);
+    expect(evaluateTrainerQualificationChecklists(qualified, "root")[1]).toMatchObject({ status: "next", progress: 100 });
+  });
 });
 
 describe("conditional forecast", () => {
+  it("adds the selected qualified trainer bonus for direct registrations", () => {
+    const root = { ...member("root", null, "G"), trainerCredential: "PT" as const };
+    const data = snapshot([root], [purchase("root", "root", 10670)]);
+    const baseMonth = {
+      period: "2026-08", continuationRate: 1, additionalPv: 0, teamActivityRate: 0,
+      introductionsPerActiveMember: 0, maxTeamRegistrations: 0
+    };
+    const withoutTrainer: ForecastScenario = {
+      id: "standard", label: "現実ライン", taxProfile: tax,
+      months: [{ ...baseMonth, registrations: [{ course: "A", placementMemberId: "root", count: 1 }] }]
+    };
+    const withTrainer: ForecastScenario = {
+      ...withoutTrainer,
+      months: [{ ...baseMonth, registrations: [{ course: "A", placementMemberId: "root", count: 1, trainerBonusRole: "PT" }] }]
+    };
+    expect(runForecast(data, "root", withTrainer).months[0]!.gross - runForecast(data, "root", withoutTrainer).months[0]!.gross).toBe(670);
+  });
+
   it("lets retained team members introduce the next generation without mutating the source", () => {
     const data = snapshot(
       [member("root", null, "G"), member("child", "root")],

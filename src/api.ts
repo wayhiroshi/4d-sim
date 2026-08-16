@@ -13,7 +13,8 @@ import type {
   SimulationOrganization,
   SimulationRequest,
   TaxProfile,
-  TitleChecklistData
+  TitleChecklistData,
+  TrainerQualificationProfile
 } from "./shared/types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -36,6 +37,7 @@ export const api = {
   simulationOrganization: (period?: string) => request<SimulationOrganization>(`/api/v1/simulation-organization${period ? `?period=${period}` : ""}`),
   createMember: (member: Omit<Member, "id" | "workspaceId" | "trainerBonusRole">) => request<Member>("/api/v1/members", { method: "POST", body: JSON.stringify(member) }),
   renameMember: (id: string, displayName: string) => request<{ id: string; displayName: string }>(`/api/v1/members/${encodeURIComponent(id)}/display-name`, { method: "PATCH", body: JSON.stringify({ displayName }) }),
+  saveTrainerProfile: (profile: TrainerQualificationProfile) => request<TrainerQualificationProfile>(`/api/v1/members/${encodeURIComponent(profile.memberId)}/trainer-profile`, { method: "PATCH", body: JSON.stringify(profile) }),
   createSimulationMember: (member: Pick<SimulationMember, "displayName" | "parentMemberId" | "course" | "period" | "trainerBonusRole" | "idKind">) => request<SimulationMember>("/api/v1/simulation-members", { method: "POST", body: JSON.stringify(member) }),
   renameSimulationMember: (id: string, displayName: string) => request<{ id: string; displayName: string }>(`/api/v1/simulation-members/${encodeURIComponent(id)}/display-name`, { method: "PATCH", body: JSON.stringify({ displayName }) }),
   clearSimulationMembers: (period: string) => request<{ deleted: number }>(`/api/v1/simulation-members?period=${encodeURIComponent(period)}`, { method: "DELETE" }),

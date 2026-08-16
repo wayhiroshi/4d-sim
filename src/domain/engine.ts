@@ -18,7 +18,9 @@ import {
   type TaxProfile,
   type TitleCode,
   type TitleChecklistItem,
-  type TitleEvaluation
+  type TitleEvaluation,
+  type TrainerBonusRole,
+  type TrainerQualificationChecklistItem
 } from "../shared/types";
 
 const money = (value: number) => Math.round(value);
@@ -297,6 +299,76 @@ export function evaluateTitleChecklists(snapshot: OrganizationSnapshot, rootId: 
   });
 }
 
+const trainerCredentialRank = (credential: Member["trainerCredential"]): number =>
+  credential === "ST" ? 2 : credential === "PT" ? 1 : 0;
+
+export function evaluateTrainerQualificationChecklists(
+  snapshot: OrganizationSnapshot,
+  rootId: string
+): TrainerQualificationChecklistItem[] {
+  const root = snapshot.members.find((member) => member.id === rootId);
+  if (!root) throw new Error(`Member not found: ${rootId}`);
+  const evaluatedTitle = evaluateTitle(snapshot, rootId).achievedTitle;
+  const directCount = directIntroductions(snapshot, rootId, false, false).length;
+
+  return (["PT", "ST"] as const).map((code) => {
+    const rule = planConfig.trainerQualifications[code];
+    const conditions: ConditionResult[] = [
+      ...(rule.requiredTitle ? [boolCondition(
+        `${code}-title`,
+        `本人が${rule.requiredTitle}`,
+        titleAtLeast(evaluatedTitle, rule.requiredTitle)
+      )] : []),
+      ...(rule.requiredTrainerCredential ? [boolCondition(
+        `${code}-trainer`,
+        "本人がプレ・トレーナー",
+        trainerCredentialRank(root.trainerCredential) >= trainerCredentialRank(rule.requiredTrainerCredential)
+      )] : []),
+      numberCondition(`${code}-direct`, "直紹介者数（サブIDを除く）", directCount, rule.directIntroductions),
+      ...(rule.requiredDirectTitle ? [numberCondition(
+        `${code}-direct-title`,
+        `1次ラインの${rule.requiredDirectTitle}人数`,
+        directTitleCount(snapshot, rootId, rule.requiredDirectTitle),
+        rule.requiredDirectTitleCount
+      )] : []),
+      ...(rule.requiresSponsorLicense ? [boolCondition(`${code}-license`, "スポンサーライセンス取得", root.sponsorLicense)] : []),
+      numberCondition(`${code}-studio`, "本部主催オープンスタジオ（セミナー）出席回数", root.openStudioAttendances, rule.openStudioAttendances),
+      boolCondition(
+        `${code}-course`,
+        code === "PT" ? "プレ・トレーナー講習会受講" : "スタート・トレーナー講習会受講",
+        root[rule.courseField]
+      ),
+      boolCondition(
+        `${code}-kit`,
+        code === "PT" ? "プレ・トレーナーキット購入" : "スタート・トレーナーキット購入",
+        root[rule.kitField]
+      )
+    ];
+    const credentialAchieved = trainerCredentialRank(root.trainerCredential) >= rule.rank;
+    const nextRank = trainerCredentialRank(root.trainerCredential) + 1;
+    const progress = credentialAchieved ? 100 : Math.round((conditions.filter((condition) => condition.met).length / conditions.length) * 100);
+    const bonuses = code === "PT"
+      ? [
+          { courseLabel: "A・F・I", solo: planConfig.trainerBonuses.A.PT, withPreTrainer: null },
+          { courseLabel: "B・G", solo: planConfig.trainerBonuses.B.PT, withPreTrainer: null }
+        ]
+      : [
+          { courseLabel: "A・F", solo: planConfig.trainerBonuses.A.ST_SOLO, withPreTrainer: planConfig.trainerBonuses.A.ST_WITH_PT },
+          { courseLabel: "B・G", solo: planConfig.trainerBonuses.B.ST_SOLO, withPreTrainer: planConfig.trainerBonuses.B.ST_WITH_PT },
+          { courseLabel: "I", solo: planConfig.trainerBonuses.I.ST_SOLO, withPreTrainer: planConfig.trainerBonuses.I.ST_WITH_PT }
+        ];
+    return {
+      code,
+      label: rule.label,
+      rank: rule.rank,
+      status: credentialAchieved ? "achieved" : rule.rank === nextRank ? "next" : "future",
+      progress,
+      conditions,
+      bonuses
+    };
+  });
+}
+
 function ratesForCourse(course: CourseCode, evaluatedTitle: TitleCode): number[] {
   const titleRates = planConfig.lineRatesByTitle[evaluatedTitle]?.[course];
   if (titleRates) return titleRates;
@@ -388,8 +460,13 @@ function computeTrainerBonus(snapshot: OrganizationSnapshot, rootId: string): nu
       if (!member) return sum;
       const role = member.trainerBonusRole
         ?? (root.trainerCredential === "PT" ? "PT" : root.trainerCredential === "ST" ? "ST_SOLO" : null);
-      return role ? sum + planConfig.trainerBonuses[member.course][role] : sum;
+      return role && trainerRoleEligible(root, role) ? sum + planConfig.trainerBonuses[member.course][role] : sum;
     }, 0);
+}
+
+function trainerRoleEligible(member: Member, role: TrainerBonusRole): boolean {
+  if (role === "PT") return member.trainerCredential === "PT" || member.trainerCredential === "ST";
+  return member.trainerCredential === "ST";
 }
 
 function computeDirectorBonus(snapshot: OrganizationSnapshot, rootId: string, title: TitleCode): number {
@@ -546,6 +623,11 @@ function cloneWithCandidate(
     title: "NONE",
     trainerCredential: "NONE",
     sponsorLicense: false,
+    openStudioAttendances: 0,
+    preTrainerCourseCompleted: false,
+    preTrainerKitPurchased: false,
+    startTrainerCourseCompleted: false,
+    startTrainerKitPurchased: false,
     directorPromotedPeriod: null,
     joinedPeriod: request.period,
     endedPeriod: null
@@ -595,6 +677,11 @@ export function applySimulationMembers(
       title: "NONE",
       trainerCredential: "NONE",
       sponsorLicense: false,
+      openStudioAttendances: 0,
+      preTrainerCourseCompleted: false,
+      preTrainerKitPurchased: false,
+      startTrainerCourseCompleted: false,
+      startTrainerKitPurchased: false,
       directorPromotedPeriod: null,
       joinedPeriod: item.period,
       endedPeriod: null
@@ -671,6 +758,7 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
       warnings: [
         "参考シミュレーションです。登録後の配置は公式サイトで確認してください",
         ...(request.idKind === "sub" ? ["自分のサブIDとして、そのIDで発生するボーナスをメインIDの収入へ合算しています。不要なサブID登録は行わないでください"] : []),
+        ...(request.trainerBonusRole && !trainerRoleEligible(root, request.trainerBonusRole) ? ["現在登録されているトレーナー資格では、このトレーナーボーナスは加算されません"] : []),
         ...(request.trainerBonusRole ? ["Aさん役の報酬は、該当トレーナー資格を有し申請書へ記載される場合の初回購入時のみです"] : []),
         ...(request.course === "I" && request.trainerBonusRole?.startsWith("ST") ? ["IコースはSトレーナー対象外のため、トレーナーボーナスは0円です"] : [])
       ]
@@ -767,8 +855,11 @@ export function runForecast(
         directRegistrations += 1;
         additions.push({
           id, workspaceId: snapshot.workspaceId, displayName: `本人紹介${index + 1}`, parentMemberId: registration.placementMemberId,
-          introducerMemberId: rootId, masterMemberId: null, trainerMemberId: null, idKind: "master", course: registration.course,
-          title: "NONE", trainerCredential: "NONE", sponsorLicense: false, directorPromotedPeriod: null,
+          introducerMemberId: rootId, masterMemberId: null, trainerMemberId: registration.trainerBonusRole ? rootId : null,
+          trainerBonusRole: registration.trainerBonusRole ?? null, idKind: "master", course: registration.course,
+          title: "NONE", trainerCredential: "NONE", sponsorLicense: false,
+          openStudioAttendances: 0, preTrainerCourseCompleted: false, preTrainerKitPurchased: false,
+          startTrainerCourseCompleted: false, startTrainerKitPurchased: false, directorPromotedPeriod: null,
           joinedPeriod: month.period, endedPeriod: null
         });
         const firstPurchase: PurchaseEvent = {
@@ -804,7 +895,9 @@ export function runForecast(
       additions.push({
         id, workspaceId: snapshot.workspaceId, displayName: `チーム紹介${index + 1}`, parentMemberId: parent.id,
         introducerMemberId: parent.id, masterMemberId: null, trainerMemberId: null, idKind: "master", course: teamCourse,
-        title: "NONE", trainerCredential: "NONE", sponsorLicense: false, directorPromotedPeriod: null,
+        title: "NONE", trainerCredential: "NONE", sponsorLicense: false,
+        openStudioAttendances: 0, preTrainerCourseCompleted: false, preTrainerKitPurchased: false,
+        startTrainerCourseCompleted: false, startTrainerKitPurchased: false, directorPromotedPeriod: null,
         joinedPeriod: month.period, endedPeriod: null
       });
       const firstPurchase: PurchaseEvent = {

@@ -64,6 +64,19 @@ export interface PlanConfig {
   compression: { enabled: boolean; promoteEndedMembers: boolean; firstLineMayExceedLimit: boolean };
   courses: Record<CourseCode, CourseRule>;
   trainerBonuses: Record<CourseCode, Record<TrainerBonusRole, number>>;
+  trainerQualifications: Record<Exclude<TrainerCredential, "NONE">, {
+    label: string;
+    rank: number;
+    requiredTitle: TitleCode | null;
+    requiredTrainerCredential: TrainerCredential | null;
+    directIntroductions: number;
+    requiredDirectTitle: TitleCode | null;
+    requiredDirectTitleCount: number;
+    openStudioAttendances: number;
+    requiresSponsorLicense: boolean;
+    courseField: "preTrainerCourseCompleted" | "startTrainerCourseCompleted";
+    kitField: "preTrainerKitPurchased" | "startTrainerKitPurchased";
+  }>;
   products: ProductRule[];
   titles: TitleRule[];
   ld: {
@@ -127,6 +140,11 @@ export interface Member {
   title: TitleCode;
   trainerCredential: TrainerCredential;
   sponsorLicense: boolean;
+  openStudioAttendances: number;
+  preTrainerCourseCompleted: boolean;
+  preTrainerKitPurchased: boolean;
+  startTrainerCourseCompleted: boolean;
+  startTrainerKitPurchased: boolean;
   directorPromotedPeriod: string | null;
   joinedPeriod: string;
   endedPeriod: string | null;
@@ -222,11 +240,34 @@ export interface TitleChecklistItem {
   }>;
 }
 
+export interface TrainerQualificationChecklistItem {
+  code: Exclude<TrainerCredential, "NONE">;
+  label: string;
+  rank: number;
+  status: "achieved" | "next" | "future";
+  progress: number;
+  conditions: ConditionResult[];
+  bonuses: Array<{ courseLabel: string; solo: number; withPreTrainer: number | null }>;
+}
+
+export interface TrainerQualificationProfile {
+  memberId: string;
+  trainerCredential: TrainerCredential;
+  sponsorLicense: boolean;
+  openStudioAttendances: number;
+  preTrainerCourseCompleted: boolean;
+  preTrainerKitPurchased: boolean;
+  startTrainerCourseCompleted: boolean;
+  startTrainerKitPurchased: boolean;
+}
+
 export interface TitleChecklistData {
   period: string;
   achievedTitle: TitleCode;
   planVersion: string;
   titles: TitleChecklistItem[];
+  trainerQualifications: TrainerQualificationChecklistItem[];
+  trainerProfile: TrainerQualificationProfile;
   sources: PlanConfig["sources"];
 }
 
@@ -300,7 +341,7 @@ export interface PlacementResult {
 
 export interface ForecastMonthlyInput {
   period: string;
-  registrations: Array<{ course: CourseCode; placementMemberId: string; count: number }>;
+  registrations: Array<{ course: CourseCode; placementMemberId: string; count: number; trainerBonusRole?: TrainerBonusRole | null }>;
   continuationRate: number;
   additionalPv: number;
   teamActivityRate: number;

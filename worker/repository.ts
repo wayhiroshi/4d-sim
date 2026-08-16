@@ -21,6 +21,11 @@ interface MemberRow {
   title: Member["title"];
   trainer_credential: Member["trainerCredential"];
   sponsor_license: number;
+  open_studio_attendances: number;
+  pre_trainer_course_completed: number;
+  pre_trainer_kit_purchased: number;
+  start_trainer_course_completed: number;
+  start_trainer_kit_purchased: number;
   director_promoted_period: string | null;
   joined_period: string;
   ended_period: string | null;
@@ -79,6 +84,11 @@ const mapMember = (row: MemberRow): Member => ({
   title: row.title,
   trainerCredential: row.trainer_credential,
   sponsorLicense: row.sponsor_license === 1,
+  openStudioAttendances: row.open_studio_attendances,
+  preTrainerCourseCompleted: row.pre_trainer_course_completed === 1,
+  preTrainerKitPurchased: row.pre_trainer_kit_purchased === 1,
+  startTrainerCourseCompleted: row.start_trainer_course_completed === 1,
+  startTrainerKitPurchased: row.start_trainer_kit_purchased === 1,
   directorPromotedPeriod: row.director_promoted_period,
   joinedPeriod: row.joined_period,
   endedPeriod: row.ended_period
@@ -160,6 +170,32 @@ export async function updateMemberDisplayName(db: D1Database, workspaceId: strin
   return result.meta.changes;
 }
 
+export async function updateMemberTrainerProfile(
+  db: D1Database,
+  workspaceId: string,
+  id: string,
+  profile: Pick<Member,
+    "trainerCredential" | "sponsorLicense" | "openStudioAttendances" |
+    "preTrainerCourseCompleted" | "preTrainerKitPurchased" |
+    "startTrainerCourseCompleted" | "startTrainerKitPurchased"
+  >
+): Promise<number> {
+  const result = await db.prepare(
+    "UPDATE members SET trainer_credential = ?, sponsor_license = ?, open_studio_attendances = ?, pre_trainer_course_completed = ?, pre_trainer_kit_purchased = ?, start_trainer_course_completed = ?, start_trainer_kit_purchased = ?, updated_at = CURRENT_TIMESTAMP WHERE workspace_id = ? AND id = ?"
+  ).bind(
+    profile.trainerCredential,
+    profile.sponsorLicense ? 1 : 0,
+    profile.openStudioAttendances,
+    profile.preTrainerCourseCompleted ? 1 : 0,
+    profile.preTrainerKitPurchased ? 1 : 0,
+    profile.startTrainerCourseCompleted ? 1 : 0,
+    profile.startTrainerKitPurchased ? 1 : 0,
+    workspaceId,
+    id
+  ).run();
+  return result.meta.changes;
+}
+
 export async function updateSimulationMemberDisplayName(db: D1Database, workspaceId: string, id: string, displayName: string): Promise<number> {
   const result = await db.prepare(
     "UPDATE simulation_members SET display_name = ? WHERE workspace_id = ? AND id = ?"
@@ -221,11 +257,14 @@ export async function upsertTaxProfile(db: D1Database, workspaceId: string, prof
 }
 
 export const memberInsert = (db: D1Database, member: Member): D1PreparedStatement => db.prepare(
-  "INSERT INTO members (id, workspace_id, display_name, parent_member_id, introducer_member_id, master_member_id, trainer_member_id, id_kind, course, title, trainer_credential, sponsor_license, director_promoted_period, joined_period, ended_period) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  "INSERT INTO members (id, workspace_id, display_name, parent_member_id, introducer_member_id, master_member_id, trainer_member_id, id_kind, course, title, trainer_credential, sponsor_license, open_studio_attendances, pre_trainer_course_completed, pre_trainer_kit_purchased, start_trainer_course_completed, start_trainer_kit_purchased, director_promoted_period, joined_period, ended_period) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 ).bind(
   member.id, member.workspaceId, member.displayName, member.parentMemberId, member.introducerMemberId,
   member.masterMemberId, member.trainerMemberId, member.idKind, member.course, member.title,
-  member.trainerCredential, member.sponsorLicense ? 1 : 0, member.directorPromotedPeriod, member.joinedPeriod, member.endedPeriod
+  member.trainerCredential, member.sponsorLicense ? 1 : 0, member.openStudioAttendances,
+  member.preTrainerCourseCompleted ? 1 : 0, member.preTrainerKitPurchased ? 1 : 0,
+  member.startTrainerCourseCompleted ? 1 : 0, member.startTrainerKitPurchased ? 1 : 0,
+  member.directorPromotedPeriod, member.joinedPeriod, member.endedPeriod
 );
 
 export const purchaseInsert = (db: D1Database, purchase: PurchaseEvent): D1PreparedStatement => db.prepare(

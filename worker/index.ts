@@ -7,6 +7,7 @@ import {
   applySimulationMembers,
   evaluateTitle,
   evaluateTitleChecklists,
+  evaluateTrainerQualificationChecklists,
   generateMissions,
   groupPv,
   ownedIds,
@@ -39,6 +40,7 @@ import {
   purchaseInsert,
   simulationMemberInsert,
   updateMemberDisplayName,
+  updateMemberTrainerProfile,
   updateSimulationMemberDisplayName,
   upsertGoal,
   upsertTaxProfile
@@ -76,6 +78,11 @@ const memberSchema = z.object({
   title: titleSchema.default("NONE"),
   trainerCredential: z.enum(["NONE", "PT", "ST"]).default("NONE"),
   sponsorLicense: z.boolean().default(false),
+  openStudioAttendances: z.number().int().nonnegative().default(0),
+  preTrainerCourseCompleted: z.boolean().default(false),
+  preTrainerKitPurchased: z.boolean().default(false),
+  startTrainerCourseCompleted: z.boolean().default(false),
+  startTrainerKitPurchased: z.boolean().default(false),
   directorPromotedPeriod: periodSchema.nullable().default(null),
   joinedPeriod: periodSchema,
   endedPeriod: periodSchema.nullable().default(null)
@@ -113,6 +120,15 @@ const simulationMemberSchema = z.object({
   trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null)
 });
 const displayNameSchema = z.object({ displayName: z.string().trim().min(1).max(80) });
+const trainerProfileSchema = z.object({
+  trainerCredential: z.enum(["NONE", "PT", "ST"]),
+  sponsorLicense: z.boolean(),
+  openStudioAttendances: z.number().int().min(0).max(999),
+  preTrainerCourseCompleted: z.boolean(),
+  preTrainerKitPurchased: z.boolean(),
+  startTrainerCourseCompleted: z.boolean(),
+  startTrainerKitPurchased: z.boolean()
+});
 
 const forecastScenarioSchema = z.object({
     id: z.enum(["conservative", "standard", "challenge"]),
@@ -122,7 +138,8 @@ const forecastScenarioSchema = z.object({
       registrations: z.array(z.object({
         course: courseSchema,
         placementMemberId: z.string().min(1),
-        count: z.number().int().min(0).max(50)
+        count: z.number().int().min(0).max(50),
+        trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null)
       })),
       continuationRate: z.number().min(0).max(1),
       additionalPv: z.number().int().min(0).max(10_000_000),
@@ -228,6 +245,17 @@ app.get("/api/v1/titles/checklist", async (context) => {
     achievedTitle,
     planVersion: planConfig.version,
     titles: evaluateTitleChecklists(snapshot, rootMember.id),
+    trainerQualifications: evaluateTrainerQualificationChecklists(snapshot, rootMember.id),
+    trainerProfile: {
+      memberId: rootMember.id,
+      trainerCredential: rootMember.trainerCredential,
+      sponsorLicense: rootMember.sponsorLicense,
+      openStudioAttendances: rootMember.openStudioAttendances,
+      preTrainerCourseCompleted: rootMember.preTrainerCourseCompleted,
+      preTrainerKitPurchased: rootMember.preTrainerKitPurchased,
+      startTrainerCourseCompleted: rootMember.startTrainerCourseCompleted,
+      startTrainerKitPurchased: rootMember.startTrainerKitPurchased
+    },
     sources: planConfig.sources
   };
   return context.json(data);
@@ -347,7 +375,10 @@ app.post("/api/v1/members", async (context) => {
     parentMemberId: input.parentMemberId ?? null, introducerMemberId: input.introducerMemberId ?? null,
     masterMemberId: input.masterMemberId ?? null, trainerMemberId: input.trainerMemberId ?? null,
     idKind: input.idKind, course: input.course, title: input.title, trainerCredential: input.trainerCredential,
-    sponsorLicense: input.sponsorLicense, directorPromotedPeriod: input.directorPromotedPeriod,
+    sponsorLicense: input.sponsorLicense, openStudioAttendances: input.openStudioAttendances,
+    preTrainerCourseCompleted: input.preTrainerCourseCompleted, preTrainerKitPurchased: input.preTrainerKitPurchased,
+    startTrainerCourseCompleted: input.startTrainerCourseCompleted, startTrainerKitPurchased: input.startTrainerKitPurchased,
+    directorPromotedPeriod: input.directorPromotedPeriod,
     joinedPeriod: input.joinedPeriod, endedPeriod: input.endedPeriod
   };
   await memberInsert(context.env.DB, member).run();
@@ -360,6 +391,17 @@ app.patch("/api/v1/members/:id/display-name", async (context) => {
   const updated = await updateMemberDisplayName(context.env.DB, context.get("workspaceId"), id, input.displayName);
   if (!updated) return context.json({ error: "メンバーが見つかりません" }, 404);
   return context.json({ id, displayName: input.displayName });
+});
+
+app.patch("/api/v1/members/:id/trainer-profile", async (context) => {
+  const id = z.string().min(1).max(80).parse(context.req.param("id"));
+  const input = await boundedJson(context.req.raw, trainerProfileSchema);
+  const snapshot = await loadSnapshot(context.env.DB, context.get("workspaceId"), await selectedPeriod(context.env.DB, undefined));
+  const rootMember = snapshot.members.find((member) => member.parentMemberId === null);
+  if (!rootMember || rootMember.id !== id) return context.json({ error: "本人の資格情報だけを更新できます" }, 403);
+  const updated = await updateMemberTrainerProfile(context.env.DB, context.get("workspaceId"), id, input);
+  if (!updated) return context.json({ error: "メンバーが見つかりません" }, 404);
+  return context.json({ memberId: id, ...input });
 });
 
 app.get("/api/v1/products", (context) => context.json({ planVersion: planConfig.version, products: planConfig.products }));
@@ -479,7 +521,10 @@ app.post("/api/v1/imports/commit", async (context) => {
         id: row.id ?? "", workspaceId, displayName: row.display_name ?? "", parentMemberId: row.parent_id || null,
         introducerMemberId: row.introducer_id || null, masterMemberId: null, trainerMemberId: null,
         idKind: row.id_kind === "sub" ? "sub" : "master", course: courseSchema.parse(row.course), title: "NONE",
-        trainerCredential: "NONE", sponsorLicense: false, directorPromotedPeriod: row.director_promoted_period || null,
+        trainerCredential: "NONE", sponsorLicense: false,
+        openStudioAttendances: 0, preTrainerCourseCompleted: false, preTrainerKitPurchased: false,
+        startTrainerCourseCompleted: false, startTrainerKitPurchased: false,
+        directorPromotedPeriod: row.director_promoted_period || null,
         joinedPeriod: row.joined_period ?? "", endedPeriod: null
       };
       statements.push(memberInsert(context.env.DB, member));
