@@ -10,6 +10,7 @@ import {
   type Mission,
   type OrganizationSnapshot,
   type PlacementBonusDelta,
+  type PlacementIncomeComparison,
   type PlacementResult,
   type PurchaseEvent,
   type SimulationMember,
@@ -587,6 +588,48 @@ const emptyPlacementBonusDelta = (): PlacementBonusDelta => ({
   oneTime: 0, recurring: 0, gross: 0, estimatedNet: 0
 });
 
+function placementIncomeComparison(
+  mode: "self" | "pair",
+  self: Member,
+  selfBefore: BonusBreakdown,
+  selfAfter: BonusBreakdown,
+  partner: Member | null,
+  partnerBefore: BonusBreakdown | null,
+  partnerAfter: BonusBreakdown | null
+): PlacementIncomeComparison {
+  const selfOwner = {
+    memberId: self.id,
+    memberName: self.displayName,
+    before: selfBefore,
+    after: selfAfter,
+    delta: compareBonusBreakdowns(selfBefore, selfAfter)
+  };
+  const partnerOwner = partner && partnerBefore && partnerAfter ? {
+    memberId: partner.id,
+    memberName: partner.displayName,
+    before: partnerBefore,
+    after: partnerAfter,
+    delta: compareBonusBreakdowns(partnerBefore, partnerAfter)
+  } : null;
+  const beforeGross = selfBefore.gross + (partnerBefore?.gross ?? 0);
+  const afterGross = selfAfter.gross + (partnerAfter?.gross ?? 0);
+  const beforeEstimatedNet = selfBefore.estimatedNet + (partnerBefore?.estimatedNet ?? 0);
+  const afterEstimatedNet = selfAfter.estimatedNet + (partnerAfter?.estimatedNet ?? 0);
+  return {
+    mode,
+    self: selfOwner,
+    partner: partnerOwner,
+    combined: {
+      beforeGross,
+      afterGross,
+      grossDelta: afterGross - beforeGross,
+      beforeEstimatedNet,
+      afterEstimatedNet,
+      estimatedNetDelta: afterEstimatedNet - beforeEstimatedNet
+    }
+  };
+}
+
 export function compareBonusBreakdowns(before: BonusBreakdown, after: BonusBreakdown): PlacementBonusDelta {
   const start = after.start - before.start;
   const trainer = after.trainer - before.trainer;
@@ -707,8 +750,19 @@ export function applySimulationMembers(
 export function simulatePlacements(snapshot: OrganizationSnapshot, request: SimulationRequest): PlacementResult[] {
   const root = snapshot.members.find((member) => member.parentMemberId === null);
   if (!root) throw new Error("Root member is required");
+  const incomeMode = request.incomeMode ?? "self";
+  const partner = incomeMode === "pair"
+    ? snapshot.members.find((member) => member.id === request.partnerMemberId) ?? null
+    : null;
+  if (incomeMode === "pair" && (!partner || partner.id === root.id || partner.idKind !== "master" || partner.masterMemberId !== null || (partner.endedPeriod !== null && partner.endedPeriod <= snapshot.period))) {
+    throw new Error("An active partner master ID is required for pair income simulation");
+  }
   const beforeTitle = evaluateTitle(snapshot, root.id);
   const beforeBonus = computeBonus(snapshot, root.id, request.taxProfile);
+  const beforePartnerBonus = partner ? computeBonus(snapshot, partner.id, request.taxProfile) : null;
+  const beforeIncomeComparison = placementIncomeComparison(
+    incomeMode, root, beforeBonus, beforeBonus, partner, beforePartnerBonus, beforePartnerBonus
+  );
   const ownedIdCountBefore = ownedIds(snapshot, root.id).length;
   const subIdLimitReached = request.idKind === "sub" && ownedIdCountBefore - 1 >= planConfig.maxSubIdsPerMaster;
   const candidates = request.placementCandidateIds?.length
@@ -722,6 +776,7 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
         placementMemberId: placement.id, placementMemberName: placement.displayName, eligible: false, rank: null,
         grossDelta: 0, estimatedNetDelta: 0, titleBefore: beforeTitle.achievedTitle, titleAfter: beforeTitle.achievedTitle,
         bonusDelta: emptyPlacementBonusDelta(),
+        incomeComparison: beforeIncomeComparison,
         missingBefore: missingCount(beforeTitle), missingAfter: missingCount(beforeTitle), earliestAchievementPeriod: null,
         ownedIdCountBefore, ownedIdCountAfter: ownedIdCountBefore,
         reasons: [], warnings: [
@@ -733,10 +788,16 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
     const simulated = cloneWithCandidate(snapshot, request, placement.id, String(index + 1));
     const afterTitle = evaluateTitle(simulated, root.id);
     const afterBonus = computeBonus(simulated, root.id, request.taxProfile);
+    const afterPartnerBonus = partner ? computeBonus(simulated, partner.id, request.taxProfile) : null;
     const bonusDelta = compareBonusBreakdowns(beforeBonus, afterBonus);
+    const incomeComparison = placementIncomeComparison(
+      incomeMode, root, beforeBonus, afterBonus, partner, beforePartnerBonus, afterPartnerBonus
+    );
     const reasons = [
       `次タイトルの未達条件が${missingCount(beforeTitle)}件から${missingCount(afterTitle)}件になります`,
-      `総ボーナス概算が${bonusDelta.gross >= 0 ? "+" : ""}${bonusDelta.gross}円変化します`
+      incomeMode === "pair"
+        ? `2名合計の総ボーナス概算が${incomeComparison.combined.grossDelta >= 0 ? "+" : ""}${incomeComparison.combined.grossDelta}円変化します`
+        : `総ボーナス概算が${bonusDelta.gross >= 0 ? "+" : ""}${bonusDelta.gross}円変化します`
     ];
     if (afterTitle.achievedTitle !== beforeTitle.achievedTitle) reasons.unshift(`${afterTitle.achievedTitle}条件に到達します`);
     return {
@@ -747,6 +808,7 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
       grossDelta: bonusDelta.gross,
       estimatedNetDelta: bonusDelta.estimatedNet,
       bonusDelta,
+      incomeComparison,
       titleBefore: beforeTitle.achievedTitle,
       titleAfter: afterTitle.achievedTitle,
       missingBefore: missingCount(beforeTitle),
@@ -757,6 +819,7 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
       reasons,
       warnings: [
         "参考シミュレーションです。登録後の配置は公式サイトで確認してください",
+        ...(incomeMode === "pair" ? ["2名の概算振込額には同じ税・控除条件を個別に適用してから合算しています。実際の条件が異なる場合は総ボーナスを基準に確認してください"] : []),
         ...(request.idKind === "sub" ? ["自分のサブIDとして、そのIDで発生するボーナスをメインIDの収入へ合算しています。不要なサブID登録は行わないでください"] : []),
         ...(request.trainerBonusRole && !trainerRoleEligible(root, request.trainerBonusRole) ? ["現在登録されているトレーナー資格では、このトレーナーボーナスは加算されません"] : []),
         ...(request.trainerBonusRole ? ["Aさん役の報酬は、該当トレーナー資格を有し申請書へ記載される場合の初回購入時のみです"] : []),
@@ -767,7 +830,7 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
   const eligible = results.filter((item) => item.eligible).sort((a, b) => {
     const targetA = a.earliestAchievementPeriod ? 0 : 1;
     const targetB = b.earliestAchievementPeriod ? 0 : 1;
-    return targetA - targetB || a.missingAfter - b.missingAfter || b.grossDelta - a.grossDelta || a.placementMemberId.localeCompare(b.placementMemberId);
+    return targetA - targetB || a.missingAfter - b.missingAfter || b.incomeComparison.combined.grossDelta - a.incomeComparison.combined.grossDelta || a.placementMemberId.localeCompare(b.placementMemberId);
   });
   eligible.forEach((item, index) => { item.rank = index + 1; });
   return results.sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER)).slice(0, 3);

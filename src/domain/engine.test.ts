@@ -292,6 +292,41 @@ describe("placement simulation", () => {
     });
   });
 
+  it("calculates self and partner separately, then ranks by the combined two-person increase", () => {
+    const data = snapshot(
+      [member("root", null, "G"), member("partner", "root")],
+      [purchase("root-repeat", "root", 10670), purchase("partner-repeat", "partner", 5330)]
+    );
+    const original = structuredClone(data);
+    const results = simulatePlacements(data, {
+      candidateName: "候補", course: "A", idKind: "master", period, targetTitle: "LD",
+      incomeMode: "pair", partnerMemberId: "partner", placementCandidateIds: ["root", "partner"], taxProfile: tax
+    });
+    const partnerPlacement = results.find((result) => result.placementMemberId === "partner");
+    expect(partnerPlacement?.rank).toBe(1);
+    expect(partnerPlacement?.incomeComparison).toMatchObject({
+      mode: "pair",
+      self: { memberId: "root", memberName: "root" },
+      partner: { memberId: "partner", memberName: "partner" }
+    });
+    expect(partnerPlacement?.incomeComparison.partner?.delta.line).toBe(800);
+    expect(partnerPlacement?.incomeComparison.combined.grossDelta).toBe(
+      (partnerPlacement?.incomeComparison.self.delta.gross ?? 0) + (partnerPlacement?.incomeComparison.partner?.delta.gross ?? 0)
+    );
+    expect(partnerPlacement?.incomeComparison.combined.estimatedNetDelta).toBe(
+      (partnerPlacement?.incomeComparison.self.delta.estimatedNet ?? 0) + (partnerPlacement?.incomeComparison.partner?.delta.estimatedNet ?? 0)
+    );
+    expect(data).toEqual(original);
+  });
+
+  it("rejects the root and owned sub IDs as pair-income partners", () => {
+    const sub = { ...member("sub", "root"), idKind: "sub" as const, masterMemberId: "root" };
+    const data = snapshot([member("root", null, "G"), sub], [purchase("root-repeat", "root", 10670)]);
+    const base = { candidateName: "候補", course: "A" as const, idKind: "master" as const, period, targetTitle: "LD" as const, incomeMode: "pair" as const, taxProfile: tax };
+    expect(() => simulatePlacements(data, { ...base, partnerMemberId: "root" })).toThrow("active partner master ID");
+    expect(() => simulatePlacements(data, { ...base, partnerMemberId: "sub" })).toThrow("active partner master ID");
+  });
+
   it("is deterministic, rejects a full line and never mutates the source", () => {
     const members = [member("root", null, "G")];
     for (let index = 0; index < 7; index += 1) members.push(member(`m${index}`, "root"));

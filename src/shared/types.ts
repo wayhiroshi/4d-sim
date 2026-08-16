@@ -305,6 +305,8 @@ export interface SimulationRequest {
   targetTitle: TitleCode;
   placementCandidateIds?: string[];
   trainerBonusRole?: TrainerBonusRole | null;
+  incomeMode?: "self" | "pair";
+  partnerMemberId?: string | null;
   taxProfile: TaxProfile;
 }
 
@@ -320,6 +322,28 @@ export interface PlacementBonusDelta {
   estimatedNet: number;
 }
 
+export interface PlacementIncomeOwner {
+  memberId: string;
+  memberName: string;
+  before: BonusBreakdown;
+  after: BonusBreakdown;
+  delta: PlacementBonusDelta;
+}
+
+export interface PlacementIncomeComparison {
+  mode: "self" | "pair";
+  self: PlacementIncomeOwner;
+  partner: PlacementIncomeOwner | null;
+  combined: {
+    beforeGross: number;
+    afterGross: number;
+    grossDelta: number;
+    beforeEstimatedNet: number;
+    afterEstimatedNet: number;
+    estimatedNetDelta: number;
+  };
+}
+
 export interface PlacementResult {
   placementMemberId: string;
   placementMemberName: string;
@@ -328,6 +352,7 @@ export interface PlacementResult {
   grossDelta: number;
   estimatedNetDelta: number;
   bonusDelta: PlacementBonusDelta;
+  incomeComparison: PlacementIncomeComparison;
   titleBefore: TitleCode;
   titleAfter: TitleCode;
   missingBefore: number;

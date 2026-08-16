@@ -27,4 +27,18 @@ describe("Worker API", () => {
     expect(activities.status).toBe(404);
     expect(prospectTemplate.status).toBe(404);
   });
+
+  it("requires a selected partner for pair-income simulations before database access", async () => {
+    const response = await app.request("https://example.test/api/v1/simulations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateName: "候補", course: "A", idKind: "master", period: "2026-07", targetTitle: "LD",
+        incomeMode: "pair", partnerMemberId: null,
+        taxProfile: { invoiceRegistered: true, withholdingRate: 0, transferFee: 0, offsets: 0, priorCarryover: 0 }
+      })
+    }, bindings);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "入力内容を確認してください" });
+  });
 });

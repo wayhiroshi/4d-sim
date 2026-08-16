@@ -108,7 +108,13 @@ const simulationSchema = z.object({
   targetTitle: titleSchema,
   placementCandidateIds: z.array(z.string()).optional(),
   trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null),
+  incomeMode: z.enum(["self", "pair"]).default("self"),
+  partnerMemberId: z.string().min(1).max(80).nullable().default(null),
   taxProfile: taxProfileSchema
+}).superRefine((value, context) => {
+  if (value.incomeMode === "pair" && !value.partnerMemberId) {
+    context.addIssue({ code: "custom", path: ["partnerMemberId"], message: "2名合算ではパートナーを選択してください" });
+  }
 });
 
 const simulationMemberSchema = z.object({
@@ -449,6 +455,12 @@ app.post("/api/v1/simulations", async (context) => {
     listSimulationMembers(context.env.DB, workspaceId, request.period)
   ]);
   const snapshot = applySimulationMembers(actual, simulationMembers);
+  if (request.incomeMode === "pair") {
+    const root = snapshot.members.find((member) => member.parentMemberId === null);
+    const partner = snapshot.members.find((member) => member.id === request.partnerMemberId);
+    const invalidPartner = !root || !partner || partner.id === root.id || partner.idKind !== "master" || partner.masterMemberId !== null || (partner.endedPeriod !== null && partner.endedPeriod <= snapshot.period);
+    if (invalidPartner) return context.json({ error: "選択したパートナーは2名合算の対象にできません" }, 400);
+  }
   return context.json({ results: simulatePlacements(snapshot, request) });
 });
 
