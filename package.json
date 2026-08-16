@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:worker": "vitest run worker",
+    "forecast:shopping-mall": "node scripts/shopping-mall-forecast.mjs",
     "typecheck": "npm run cf-typegen && tsc -b --pretty false",
     "verify:ci": "npm run typecheck && npm test && npm run build:production",
     "cf-typegen": "wrangler types worker-configuration.d.ts",

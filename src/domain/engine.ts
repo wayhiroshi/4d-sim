@@ -3,20 +3,25 @@ import {
   TITLE_ORDER,
   type BonusBreakdown,
   type ConditionResult,
+  type CourseCode,
   type ForecastResult,
   type ForecastScenario,
   type Member,
   type Mission,
   type OrganizationSnapshot,
   type PlacementBonusDelta,
+  type PlacementIncomeComparison,
   type PlacementResult,
   type PurchaseEvent,
   type SimulationMember,
   type SimulationRequest,
+  type ShoppingMallInvitationEstimate,
   type TaxProfile,
   type TitleCode,
   type TitleChecklistItem,
-  type TitleEvaluation
+  type TitleEvaluation,
+  type TrainerBonusRole,
+  type TrainerQualificationChecklistItem
 } from "../shared/types";
 
 const money = (value: number) => Math.round(value);
@@ -90,6 +95,20 @@ export function descendants(snapshot: OrganizationSnapshot, rootId: string): Arr
     for (const child of childrenOf(snapshot, item.member.id)) queue.push({ member: child, depth: item.depth + 1 });
   }
   return output;
+}
+
+export function ownedIds(snapshot: OrganizationSnapshot, masterId: string): Member[] {
+  const master = snapshot.members.find((member) => member.id === masterId);
+  if (!master) return [];
+  if (master.idKind === "sub") return [master];
+  return [
+    master,
+    ...snapshot.members.filter((member) =>
+      member.idKind === "sub" &&
+      member.masterMemberId === masterId &&
+      (member.endedPeriod === null || member.endedPeriod > snapshot.period)
+    )
+  ];
 }
 
 export function groupPv(snapshot: OrganizationSnapshot, rootId: string, period = snapshot.period): number {
@@ -281,18 +300,130 @@ export function evaluateTitleChecklists(snapshot: OrganizationSnapshot, rootId: 
   });
 }
 
-function ratesFor(member: Member, evaluatedTitle: TitleCode): number[] {
-  const titleRates = planConfig.lineRatesByTitle[evaluatedTitle]?.[member.course];
+const trainerCredentialRank = (credential: Member["trainerCredential"]): number =>
+  credential === "ST" ? 2 : credential === "PT" ? 1 : 0;
+
+export function evaluateTrainerQualificationChecklists(
+  snapshot: OrganizationSnapshot,
+  rootId: string
+): TrainerQualificationChecklistItem[] {
+  const root = snapshot.members.find((member) => member.id === rootId);
+  if (!root) throw new Error(`Member not found: ${rootId}`);
+  const evaluatedTitle = evaluateTitle(snapshot, rootId).achievedTitle;
+  const directCount = directIntroductions(snapshot, rootId, false, false).length;
+
+  return (["PT", "ST"] as const).map((code) => {
+    const rule = planConfig.trainerQualifications[code];
+    const conditions: ConditionResult[] = [
+      ...(rule.requiredTitle ? [boolCondition(
+        `${code}-title`,
+        `本人が${rule.requiredTitle}`,
+        titleAtLeast(evaluatedTitle, rule.requiredTitle)
+      )] : []),
+      ...(rule.requiredTrainerCredential ? [boolCondition(
+        `${code}-trainer`,
+        "本人がプレ・トレーナー",
+        trainerCredentialRank(root.trainerCredential) >= trainerCredentialRank(rule.requiredTrainerCredential)
+      )] : []),
+      numberCondition(`${code}-direct`, "直紹介者数（サブIDを除く）", directCount, rule.directIntroductions),
+      ...(rule.requiredDirectTitle ? [numberCondition(
+        `${code}-direct-title`,
+        `1次ラインの${rule.requiredDirectTitle}人数`,
+        directTitleCount(snapshot, rootId, rule.requiredDirectTitle),
+        rule.requiredDirectTitleCount
+      )] : []),
+      ...(rule.requiresSponsorLicense ? [boolCondition(`${code}-license`, "スポンサーライセンス取得", root.sponsorLicense)] : []),
+      numberCondition(`${code}-studio`, "本部主催オープンスタジオ（セミナー）出席回数", root.openStudioAttendances, rule.openStudioAttendances),
+      boolCondition(
+        `${code}-course`,
+        code === "PT" ? "プレ・トレーナー講習会受講" : "スタート・トレーナー講習会受講",
+        root[rule.courseField]
+      ),
+      boolCondition(
+        `${code}-kit`,
+        code === "PT" ? "プレ・トレーナーキット購入" : "スタート・トレーナーキット購入",
+        root[rule.kitField]
+      )
+    ];
+    const credentialAchieved = trainerCredentialRank(root.trainerCredential) >= rule.rank;
+    const nextRank = trainerCredentialRank(root.trainerCredential) + 1;
+    const progress = credentialAchieved ? 100 : Math.round((conditions.filter((condition) => condition.met).length / conditions.length) * 100);
+    const bonuses = code === "PT"
+      ? [
+          { courseLabel: "A・F・I", solo: planConfig.trainerBonuses.A.PT, withPreTrainer: null },
+          { courseLabel: "B・G", solo: planConfig.trainerBonuses.B.PT, withPreTrainer: null }
+        ]
+      : [
+          { courseLabel: "A・F", solo: planConfig.trainerBonuses.A.ST_SOLO, withPreTrainer: planConfig.trainerBonuses.A.ST_WITH_PT },
+          { courseLabel: "B・G", solo: planConfig.trainerBonuses.B.ST_SOLO, withPreTrainer: planConfig.trainerBonuses.B.ST_WITH_PT },
+          { courseLabel: "I", solo: planConfig.trainerBonuses.I.ST_SOLO, withPreTrainer: planConfig.trainerBonuses.I.ST_WITH_PT }
+        ];
+    return {
+      code,
+      label: rule.label,
+      rank: rule.rank,
+      status: credentialAchieved ? "achieved" : rule.rank === nextRank ? "next" : "future",
+      progress,
+      conditions,
+      bonuses
+    };
+  });
+}
+
+function ratesForCourse(course: CourseCode, evaluatedTitle: TitleCode): number[] {
+  const titleRates = planConfig.lineRatesByTitle[evaluatedTitle]?.[course];
   if (titleRates) return titleRates;
   if (titleAtLeast(evaluatedTitle, "DR")) {
-    const directorRates = planConfig.lineRatesByTitle.DR?.[member.course];
+    const directorRates = planConfig.lineRatesByTitle.DR?.[course];
     if (directorRates) return directorRates;
   }
   if (titleAtLeast(evaluatedTitle, "LD")) {
-    const ldRates = planConfig.lineRatesByTitle.LD?.[member.course];
+    const ldRates = planConfig.lineRatesByTitle.LD?.[course];
     if (ldRates) return ldRates;
   }
-  return planConfig.courses[member.course].baseLineRates;
+  return planConfig.courses[course].baseLineRates;
+}
+
+function ratesFor(member: Member, evaluatedTitle: TitleCode): number[] {
+  return ratesForCourse(member.course, evaluatedTitle);
+}
+
+export function computeShoppingMallInvitationEstimate(options: {
+  productCode: string;
+  course: CourseCode;
+  title: TitleCode;
+  orders: number;
+  includeIssueFee?: boolean;
+}): ShoppingMallInvitationEstimate {
+  if (!Number.isInteger(options.orders) || options.orders < 0) {
+    throw new Error(`Orders must be a non-negative integer: ${options.orders}`);
+  }
+  const product = planConfig.shoppingMallInvitation.products.find((item) => item.code === options.productCode);
+  if (!product) throw new Error(`Shopping mall product not found: ${options.productCode}`);
+  const firstLineRate = ratesForCourse(options.course, options.title)[0] ?? 0;
+  const salesBonusPerOrder = product.normalPrice - product.memberPrice;
+  const pvBonusPerOrder = money(product.standardPv * firstLineRate);
+  const grossBonusPerOrder = salesBonusPerOrder + pvBonusPerOrder;
+  const issueFee = options.includeIssueFee === false ? 0 : planConfig.shoppingMallInvitation.issueFeePerId;
+
+  return {
+    productCode: product.code,
+    productName: product.name,
+    course: options.course,
+    title: options.title,
+    orders: options.orders,
+    standardPvPerOrder: product.standardPv,
+    creditedPv: product.standardPv * options.orders,
+    firstLineRate,
+    salesBonusPerOrder,
+    pvBonusPerOrder,
+    grossBonusPerOrder,
+    salesBonus: salesBonusPerOrder * options.orders,
+    pvBonus: pvBonusPerOrder * options.orders,
+    grossBonus: grossBonusPerOrder * options.orders,
+    issueFee,
+    afterIssueFee: grossBonusPerOrder * options.orders - issueFee
+  };
 }
 
 export function computeLineBonus(snapshot: OrganizationSnapshot, rootId: string, forcedTitle?: TitleCode): number {
@@ -330,8 +461,13 @@ function computeTrainerBonus(snapshot: OrganizationSnapshot, rootId: string): nu
       if (!member) return sum;
       const role = member.trainerBonusRole
         ?? (root.trainerCredential === "PT" ? "PT" : root.trainerCredential === "ST" ? "ST_SOLO" : null);
-      return role ? sum + planConfig.trainerBonuses[member.course][role] : sum;
+      return role && trainerRoleEligible(root, role) ? sum + planConfig.trainerBonuses[member.course][role] : sum;
     }, 0);
+}
+
+function trainerRoleEligible(member: Member, role: TrainerBonusRole): boolean {
+  if (role === "PT") return member.trainerCredential === "PT" || member.trainerCredential === "ST";
+  return member.trainerCredential === "ST";
 }
 
 function computeDirectorBonus(snapshot: OrganizationSnapshot, rootId: string, title: TitleCode): number {
@@ -395,16 +531,11 @@ function invoiceTransitionDeduction(gross: number, period: string, invoiceRegist
   return money((gross / 11) * transition.disallowedInputTaxRate);
 }
 
-export function computeBonus(
-  snapshot: OrganizationSnapshot,
-  rootId: string,
-  taxProfile: TaxProfile
-): BonusBreakdown {
+type RawBonus = Pick<BonusBreakdown, "start" | "trainer" | "line" | "director" | "title" | "gross">;
+
+function computeRawBonus(snapshot: OrganizationSnapshot, rootId: string): RawBonus {
   if (!isActive(snapshot, rootId)) {
-    return {
-      start: 0, trainer: 0, line: 0, director: 0, title: 0, gross: 0,
-      estimatedNet: taxProfile.priorCarryover, deductions: { invoiceTransition: 0, withholding: 0, transferFee: 0, offsets: taxProfile.offsets }, carryover: taxProfile.priorCarryover
-    };
+    return { start: 0, trainer: 0, line: 0, director: 0, title: 0, gross: 0 };
   }
   const evaluatedTitle = evaluateTitle(snapshot, rootId).achievedTitle;
   const start = computeStartBonus(snapshot, rootId);
@@ -415,6 +546,26 @@ export function computeBonus(
   const director = computeDirectorBonus(snapshot, rootId, evaluatedTitle);
   const title = computeTitleBonus(snapshot, rootId, evaluatedTitle);
   const gross = money(start + trainer + line + director + title);
+  return { start, trainer, line, director, title, gross };
+}
+
+export function computeBonus(
+  snapshot: OrganizationSnapshot,
+  rootId: string,
+  taxProfile: TaxProfile
+): BonusBreakdown {
+  const raw = ownedIds(snapshot, rootId).reduce<RawBonus>((total, member) => {
+    const bonus = computeRawBonus(snapshot, member.id);
+    return {
+      start: total.start + bonus.start,
+      trainer: total.trainer + bonus.trainer,
+      line: total.line + bonus.line,
+      director: total.director + bonus.director,
+      title: total.title + bonus.title,
+      gross: total.gross + bonus.gross
+    };
+  }, { start: 0, trainer: 0, line: 0, director: 0, title: 0, gross: 0 });
+  const { start, trainer, line, director, title, gross } = raw;
   const invoiceTransition = invoiceTransitionDeduction(gross, snapshot.period, taxProfile.invoiceRegistered);
   const withholding = money(Math.max(0, gross - taxProfile.offsets - invoiceTransition) * taxProfile.withholdingRate);
   const payable = gross + taxProfile.priorCarryover - taxProfile.offsets - invoiceTransition - withholding;
@@ -436,6 +587,48 @@ const emptyPlacementBonusDelta = (): PlacementBonusDelta => ({
   start: 0, trainer: 0, line: 0, director: 0, title: 0,
   oneTime: 0, recurring: 0, gross: 0, estimatedNet: 0
 });
+
+function placementIncomeComparison(
+  mode: "self" | "pair",
+  self: Member,
+  selfBefore: BonusBreakdown,
+  selfAfter: BonusBreakdown,
+  partner: Member | null,
+  partnerBefore: BonusBreakdown | null,
+  partnerAfter: BonusBreakdown | null
+): PlacementIncomeComparison {
+  const selfOwner = {
+    memberId: self.id,
+    memberName: self.displayName,
+    before: selfBefore,
+    after: selfAfter,
+    delta: compareBonusBreakdowns(selfBefore, selfAfter)
+  };
+  const partnerOwner = partner && partnerBefore && partnerAfter ? {
+    memberId: partner.id,
+    memberName: partner.displayName,
+    before: partnerBefore,
+    after: partnerAfter,
+    delta: compareBonusBreakdowns(partnerBefore, partnerAfter)
+  } : null;
+  const beforeGross = selfBefore.gross + (partnerBefore?.gross ?? 0);
+  const afterGross = selfAfter.gross + (partnerAfter?.gross ?? 0);
+  const beforeEstimatedNet = selfBefore.estimatedNet + (partnerBefore?.estimatedNet ?? 0);
+  const afterEstimatedNet = selfAfter.estimatedNet + (partnerAfter?.estimatedNet ?? 0);
+  return {
+    mode,
+    self: selfOwner,
+    partner: partnerOwner,
+    combined: {
+      beforeGross,
+      afterGross,
+      grossDelta: afterGross - beforeGross,
+      beforeEstimatedNet,
+      afterEstimatedNet,
+      estimatedNetDelta: afterEstimatedNet - beforeEstimatedNet
+    }
+  };
+}
 
 export function compareBonusBreakdowns(before: BonusBreakdown, after: BonusBreakdown): PlacementBonusDelta {
   const start = after.start - before.start;
@@ -465,14 +658,19 @@ function cloneWithCandidate(
     displayName: request.candidateName,
     parentMemberId: placementMemberId,
     introducerMemberId: snapshot.members.find((member) => member.parentMemberId === null)?.id ?? placementMemberId,
-    masterMemberId: null,
+    masterMemberId: request.idKind === "sub" ? snapshot.members.find((member) => member.parentMemberId === null)?.id ?? null : null,
     trainerMemberId: request.trainerBonusRole ? snapshot.members.find((member) => member.parentMemberId === null)?.id ?? null : null,
     trainerBonusRole: request.trainerBonusRole ?? null,
-    idKind: "master",
+    idKind: request.idKind,
     course: request.course,
     title: "NONE",
     trainerCredential: "NONE",
     sponsorLicense: false,
+    openStudioAttendances: 0,
+    preTrainerCourseCompleted: false,
+    preTrainerKitPurchased: false,
+    startTrainerCourseCompleted: false,
+    startTrainerKitPurchased: false,
     directorPromotedPeriod: null,
     joinedPeriod: request.period,
     endedPeriod: null
@@ -514,14 +712,19 @@ export function applySimulationMembers(
       displayName: item.displayName,
       parentMemberId: item.parentMemberId,
       introducerMemberId: item.introducerMemberId,
-      masterMemberId: null,
+      masterMemberId: item.masterMemberId,
       trainerMemberId: item.trainerMemberId,
       trainerBonusRole: item.trainerBonusRole,
-      idKind: "master",
+      idKind: item.idKind,
       course: item.course,
       title: "NONE",
       trainerCredential: "NONE",
       sponsorLicense: false,
+      openStudioAttendances: 0,
+      preTrainerCourseCompleted: false,
+      preTrainerKitPurchased: false,
+      startTrainerCourseCompleted: false,
+      startTrainerKitPurchased: false,
       directorPromotedPeriod: null,
       joinedPeriod: item.period,
       endedPeriod: null
@@ -547,30 +750,54 @@ export function applySimulationMembers(
 export function simulatePlacements(snapshot: OrganizationSnapshot, request: SimulationRequest): PlacementResult[] {
   const root = snapshot.members.find((member) => member.parentMemberId === null);
   if (!root) throw new Error("Root member is required");
+  const incomeMode = request.incomeMode ?? "self";
+  const partner = incomeMode === "pair"
+    ? snapshot.members.find((member) => member.id === request.partnerMemberId) ?? null
+    : null;
+  if (incomeMode === "pair" && (!partner || partner.id === root.id || partner.idKind !== "master" || partner.masterMemberId !== null || (partner.endedPeriod !== null && partner.endedPeriod <= snapshot.period))) {
+    throw new Error("An active partner master ID is required for pair income simulation");
+  }
   const beforeTitle = evaluateTitle(snapshot, root.id);
   const beforeBonus = computeBonus(snapshot, root.id, request.taxProfile);
+  const beforePartnerBonus = partner ? computeBonus(snapshot, partner.id, request.taxProfile) : null;
+  const beforeIncomeComparison = placementIncomeComparison(
+    incomeMode, root, beforeBonus, beforeBonus, partner, beforePartnerBonus, beforePartnerBonus
+  );
+  const ownedIdCountBefore = ownedIds(snapshot, root.id).length;
+  const subIdLimitReached = request.idKind === "sub" && ownedIdCountBefore - 1 >= planConfig.maxSubIdsPerMaster;
   const candidates = request.placementCandidateIds?.length
     ? snapshot.members.filter((member) => request.placementCandidateIds?.includes(member.id))
     : snapshot.members.filter((member) => member.endedPeriod === null);
   const results = candidates.map((placement, index): PlacementResult => {
     const firstLineCount = childrenOf(snapshot, placement.id).length;
-    const eligible = firstLineCount < planConfig.firstLineLimit;
+    const eligible = firstLineCount < planConfig.firstLineLimit && !subIdLimitReached;
     if (!eligible) {
       return {
         placementMemberId: placement.id, placementMemberName: placement.displayName, eligible: false, rank: null,
         grossDelta: 0, estimatedNetDelta: 0, titleBefore: beforeTitle.achievedTitle, titleAfter: beforeTitle.achievedTitle,
         bonusDelta: emptyPlacementBonusDelta(),
+        incomeComparison: beforeIncomeComparison,
         missingBefore: missingCount(beforeTitle), missingAfter: missingCount(beforeTitle), earliestAchievementPeriod: null,
-        reasons: [], warnings: ["1次ライン上限7名に達しています"]
+        ownedIdCountBefore, ownedIdCountAfter: ownedIdCountBefore,
+        reasons: [], warnings: [
+          ...(firstLineCount >= planConfig.firstLineLimit ? ["1次ライン上限7名に達しています"] : []),
+          ...(subIdLimitReached ? [`自分のサブIDは通常上限${planConfig.maxSubIdsPerMaster}件に達しています`] : [])
+        ]
       };
     }
     const simulated = cloneWithCandidate(snapshot, request, placement.id, String(index + 1));
     const afterTitle = evaluateTitle(simulated, root.id);
     const afterBonus = computeBonus(simulated, root.id, request.taxProfile);
+    const afterPartnerBonus = partner ? computeBonus(simulated, partner.id, request.taxProfile) : null;
     const bonusDelta = compareBonusBreakdowns(beforeBonus, afterBonus);
+    const incomeComparison = placementIncomeComparison(
+      incomeMode, root, beforeBonus, afterBonus, partner, beforePartnerBonus, afterPartnerBonus
+    );
     const reasons = [
       `次タイトルの未達条件が${missingCount(beforeTitle)}件から${missingCount(afterTitle)}件になります`,
-      `総ボーナス概算が${bonusDelta.gross >= 0 ? "+" : ""}${bonusDelta.gross}円変化します`
+      incomeMode === "pair"
+        ? `2名合計の総ボーナス概算が${incomeComparison.combined.grossDelta >= 0 ? "+" : ""}${incomeComparison.combined.grossDelta}円変化します`
+        : `総ボーナス概算が${bonusDelta.gross >= 0 ? "+" : ""}${bonusDelta.gross}円変化します`
     ];
     if (afterTitle.achievedTitle !== beforeTitle.achievedTitle) reasons.unshift(`${afterTitle.achievedTitle}条件に到達します`);
     return {
@@ -581,14 +808,20 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
       grossDelta: bonusDelta.gross,
       estimatedNetDelta: bonusDelta.estimatedNet,
       bonusDelta,
+      incomeComparison,
       titleBefore: beforeTitle.achievedTitle,
       titleAfter: afterTitle.achievedTitle,
       missingBefore: missingCount(beforeTitle),
       missingAfter: missingCount(afterTitle),
       earliestAchievementPeriod: titleAtLeast(afterTitle.achievedTitle, request.targetTitle) ? request.period : null,
+      ownedIdCountBefore,
+      ownedIdCountAfter: ownedIds(simulated, root.id).length,
       reasons,
       warnings: [
         "参考シミュレーションです。登録後の配置は公式サイトで確認してください",
+        ...(incomeMode === "pair" ? ["2名の概算振込額には同じ税・控除条件を個別に適用してから合算しています。実際の条件が異なる場合は総ボーナスを基準に確認してください"] : []),
+        ...(request.idKind === "sub" ? ["自分のサブIDとして、そのIDで発生するボーナスをメインIDの収入へ合算しています。不要なサブID登録は行わないでください"] : []),
+        ...(request.trainerBonusRole && !trainerRoleEligible(root, request.trainerBonusRole) ? ["現在登録されているトレーナー資格では、このトレーナーボーナスは加算されません"] : []),
         ...(request.trainerBonusRole ? ["Aさん役の報酬は、該当トレーナー資格を有し申請書へ記載される場合の初回購入時のみです"] : []),
         ...(request.course === "I" && request.trainerBonusRole?.startsWith("ST") ? ["IコースはSトレーナー対象外のため、トレーナーボーナスは0円です"] : [])
       ]
@@ -597,7 +830,7 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
   const eligible = results.filter((item) => item.eligible).sort((a, b) => {
     const targetA = a.earliestAchievementPeriod ? 0 : 1;
     const targetB = b.earliestAchievementPeriod ? 0 : 1;
-    return targetA - targetB || a.missingAfter - b.missingAfter || b.grossDelta - a.grossDelta || a.placementMemberId.localeCompare(b.placementMemberId);
+    return targetA - targetB || a.missingAfter - b.missingAfter || b.incomeComparison.combined.grossDelta - a.incomeComparison.combined.grossDelta || a.placementMemberId.localeCompare(b.placementMemberId);
   });
   eligible.forEach((item, index) => { item.rank = index + 1; });
   return results.sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER)).slice(0, 3);
@@ -685,8 +918,11 @@ export function runForecast(
         directRegistrations += 1;
         additions.push({
           id, workspaceId: snapshot.workspaceId, displayName: `本人紹介${index + 1}`, parentMemberId: registration.placementMemberId,
-          introducerMemberId: rootId, masterMemberId: null, trainerMemberId: null, idKind: "master", course: registration.course,
-          title: "NONE", trainerCredential: "NONE", sponsorLicense: false, directorPromotedPeriod: null,
+          introducerMemberId: rootId, masterMemberId: null, trainerMemberId: registration.trainerBonusRole ? rootId : null,
+          trainerBonusRole: registration.trainerBonusRole ?? null, idKind: "master", course: registration.course,
+          title: "NONE", trainerCredential: "NONE", sponsorLicense: false,
+          openStudioAttendances: 0, preTrainerCourseCompleted: false, preTrainerKitPurchased: false,
+          startTrainerCourseCompleted: false, startTrainerKitPurchased: false, directorPromotedPeriod: null,
           joinedPeriod: month.period, endedPeriod: null
         });
         const firstPurchase: PurchaseEvent = {
@@ -722,7 +958,9 @@ export function runForecast(
       additions.push({
         id, workspaceId: snapshot.workspaceId, displayName: `チーム紹介${index + 1}`, parentMemberId: parent.id,
         introducerMemberId: parent.id, masterMemberId: null, trainerMemberId: null, idKind: "master", course: teamCourse,
-        title: "NONE", trainerCredential: "NONE", sponsorLicense: false, directorPromotedPeriod: null,
+        title: "NONE", trainerCredential: "NONE", sponsorLicense: false,
+        openStudioAttendances: 0, preTrainerCourseCompleted: false, preTrainerKitPurchased: false,
+        startTrainerCourseCompleted: false, startTrainerKitPurchased: false, directorPromotedPeriod: null,
         joinedPeriod: month.period, endedPeriod: null
       });
       const firstPurchase: PurchaseEvent = {
@@ -750,6 +988,7 @@ export function runForecast(
       title,
       gross: bonus.gross,
       estimatedNet: bonus.estimatedNet,
+      ownedIdCount: ownedIds(snapshot, rootId).length,
       directRegistrations,
       teamRegistrations,
       retainedMembers: Math.max(0, retainedIds.size - (retainedIds.has(rootId) ? 1 : 0)) + additions.length

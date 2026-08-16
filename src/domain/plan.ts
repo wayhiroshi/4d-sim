@@ -29,6 +29,32 @@ const trainerBonuses = z.object({
   ST_WITH_PT: z.number().int().nonnegative()
 });
 
+const trainerQualification = z.object({
+  label: z.string().min(1),
+  rank: z.number().int().positive(),
+  requiredTitle: titleCode.nullable(),
+  requiredTrainerCredential: z.enum(["NONE", "PT", "ST"]).nullable(),
+  directIntroductions: z.number().int().nonnegative(),
+  requiredDirectTitle: titleCode.nullable(),
+  requiredDirectTitleCount: z.number().int().nonnegative(),
+  openStudioAttendances: z.number().int().nonnegative(),
+  requiresSponsorLicense: z.boolean(),
+  courseField: z.enum(["preTrainerCourseCompleted", "startTrainerCourseCompleted"]),
+  kitField: z.enum(["preTrainerKitPurchased", "startTrainerKitPurchased"])
+});
+
+const shoppingMallProduct = z.object({
+  code: z.string().min(1),
+  memberProductCode: z.string().min(1),
+  name: z.string().min(1),
+  normalPrice: z.number().nonnegative(),
+  memberPrice: z.number().nonnegative(),
+  standardPv: z.number().nonnegative(),
+  priceVerifiedOn: z.iso.date(),
+  effectiveFrom: z.iso.date(),
+  effectiveTo: z.iso.date().nullable()
+});
+
 const planSchema = z.object({
   planId: z.string().min(1),
   version: z.string().min(1),
@@ -36,9 +62,11 @@ const planSchema = z.object({
   effectiveTo: z.iso.date().nullable(),
   businessMonthStartDay: z.number().int().min(1).max(28),
   firstLineLimit: z.number().int().positive(),
+  maxSubIdsPerMaster: z.number().int().positive(),
   compression: z.object({ enabled: z.boolean(), promoteEndedMembers: z.boolean(), firstLineMayExceedLimit: z.boolean() }),
   courses: z.record(courseCode, course),
   trainerBonuses: z.record(courseCode, trainerBonuses),
+  trainerQualifications: z.object({ PT: trainerQualification, ST: trainerQualification }),
   products: z.array(product),
   titles: z.array(z.object({
     code: z.enum(["LD", "LL", "DR", "SD", "TD", "TRD"]),
@@ -78,6 +106,13 @@ const planSchema = z.object({
     titleCode,
     z.partialRecord(courseCode, z.array(z.number().min(0).max(1)))
   ),
+  shoppingMallInvitation: z.object({
+    effectiveFrom: z.iso.date(),
+    issueFeePerId: z.number().int().nonnegative(),
+    maxUplineDepth: z.number().int().positive(),
+    creditDelayDays: z.number().int().nonnegative(),
+    products: z.array(shoppingMallProduct)
+  }),
   tax: z.object({
     paymentCarryoverThreshold: z.number().nonnegative(),
     invoiceTransitions: z.array(z.object({

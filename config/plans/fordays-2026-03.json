@@ -1,10 +1,11 @@
 {
   "planId": "fordays-jp",
-  "version": "2026-03+2026-05-products",
+  "version": "2026-03+2026-06-shopping-mall+sub-id+trainer",
   "effectiveFrom": "2026-03-18",
   "effectiveTo": null,
   "businessMonthStartDay": 18,
   "firstLineLimit": 7,
+  "maxSubIdsPerMaster": 5,
   "compression": { "enabled": true, "promoteEndedMembers": true, "firstLineMayExceedLimit": true },
   "courses": {
     "A": { "code": "A", "recurringPv": 5330, "startBonus": 3740, "maxBaseDepth": 5, "baseLineRates": [0.15, 0.05, 0.05, 0.05, 0.05] },
@@ -19,6 +20,34 @@
     "F": { "PT": 670, "ST_SOLO": 2240, "ST_WITH_PT": 1570 },
     "G": { "PT": 1680, "ST_SOLO": 5450, "ST_WITH_PT": 3770 },
     "I": { "PT": 670, "ST_SOLO": 0, "ST_WITH_PT": 0 }
+  },
+  "trainerQualifications": {
+    "PT": {
+      "label": "プレ・トレーナー",
+      "rank": 1,
+      "requiredTitle": "LD",
+      "requiredTrainerCredential": null,
+      "directIntroductions": 3,
+      "requiredDirectTitle": null,
+      "requiredDirectTitleCount": 0,
+      "openStudioAttendances": 1,
+      "requiresSponsorLicense": true,
+      "courseField": "preTrainerCourseCompleted",
+      "kitField": "preTrainerKitPurchased"
+    },
+    "ST": {
+      "label": "スタート・トレーナー",
+      "rank": 2,
+      "requiredTitle": null,
+      "requiredTrainerCredential": "PT",
+      "directIntroductions": 3,
+      "requiredDirectTitle": "LD",
+      "requiredDirectTitleCount": 1,
+      "openStudioAttendances": 3,
+      "requiresSponsorLicense": true,
+      "courseField": "startTrainerCourseCompleted",
+      "kitField": "startTrainerKitPurchased"
+    }
   },
   "products": [
     { "code": "005510", "name": "ナチュラル DNコラーゲン Aコース", "price": 9950, "pv": 5330, "conversion": 0, "category": "drink", "effectiveFrom": "2026-05-18", "effectiveTo": null },
@@ -70,6 +99,25 @@
       "B": [0.15, 0.1, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0.02, 0.02], "G": [0.15, 0.1, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0.02, 0.02]
     }
   },
+  "shoppingMallInvitation": {
+    "effectiveFrom": "2026-06-18",
+    "issueFeePerId": 1100,
+    "maxUplineDepth": 12,
+    "creditDelayDays": 1,
+    "products": [
+      {
+        "code": "SHOP-005510",
+        "memberProductCode": "005510",
+        "name": "ナチュラル DNコラーゲン（公式ショッピングモール）",
+        "normalPrice": 12840,
+        "memberPrice": 9950,
+        "standardPv": 5330,
+        "priceVerifiedOn": "2026-07-27",
+        "effectiveFrom": "2026-06-18",
+        "effectiveTo": null
+      }
+    ]
+  },
   "tax": {
     "paymentCarryoverThreshold": 3000,
     "invoiceTransitions": [
@@ -81,6 +129,10 @@
     { "name": "フォーデイズ ビジネスマニュアル", "revision": "2026-03", "pages": "3-18" },
     { "name": "製品ガイド", "revision": "RA202605", "pages": "1-12" },
     { "name": "ポジションとタイトル等の取得条件", "revision": "2025-09-30", "pages": "1" },
-    { "name": "新しいDR資格取得条件", "revision": "2025-07-18/08-20修正", "pages": "1" }
+    { "name": "新しいDR資格取得条件", "revision": "2025-07-18/08-20修正", "pages": "1" },
+    { "name": "契約書面", "revision": "2025-09-18改版", "pages": "6-7（サブID・ボーナス合算）" },
+    { "name": "公式 フォーデイズショッピングモール招待コード利用 Q&A", "revision": "2026-06-18", "pages": "1-2" },
+    { "name": "Fordays Invitation Code Guide", "revision": "2026-06", "pages": "2" },
+    { "name": "フォーデイズ公式 ナチュラル DNコラーゲン製品ページ", "revision": "2026-07-27確認", "pages": "Web" }
   ]
 }

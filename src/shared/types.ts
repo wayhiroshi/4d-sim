@@ -41,6 +41,18 @@ export interface TitleRule {
   requiredDirectTitleCount: number;
 }
 
+export interface ShoppingMallProductRule {
+  code: string;
+  memberProductCode: string;
+  name: string;
+  normalPrice: number;
+  memberPrice: number;
+  standardPv: number;
+  priceVerifiedOn: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+}
+
 export interface PlanConfig {
   planId: string;
   version: string;
@@ -48,9 +60,23 @@ export interface PlanConfig {
   effectiveTo: string | null;
   businessMonthStartDay: number;
   firstLineLimit: number;
+  maxSubIdsPerMaster: number;
   compression: { enabled: boolean; promoteEndedMembers: boolean; firstLineMayExceedLimit: boolean };
   courses: Record<CourseCode, CourseRule>;
   trainerBonuses: Record<CourseCode, Record<TrainerBonusRole, number>>;
+  trainerQualifications: Record<Exclude<TrainerCredential, "NONE">, {
+    label: string;
+    rank: number;
+    requiredTitle: TitleCode | null;
+    requiredTrainerCredential: TrainerCredential | null;
+    directIntroductions: number;
+    requiredDirectTitle: TitleCode | null;
+    requiredDirectTitleCount: number;
+    openStudioAttendances: number;
+    requiresSponsorLicense: boolean;
+    courseField: "preTrainerCourseCompleted" | "startTrainerCourseCompleted";
+    kitField: "preTrainerKitPurchased" | "startTrainerKitPurchased";
+  }>;
   products: ProductRule[];
   titles: TitleRule[];
   ld: {
@@ -67,11 +93,37 @@ export interface PlanConfig {
     pattern2ExcludesSevenOrMoreIds: boolean;
   };
   lineRatesByTitle: Partial<Record<TitleCode, Partial<Record<CourseCode, number[]>>>>;
+  shoppingMallInvitation: {
+    effectiveFrom: string;
+    issueFeePerId: number;
+    maxUplineDepth: number;
+    creditDelayDays: number;
+    products: ShoppingMallProductRule[];
+  };
   tax: {
     paymentCarryoverThreshold: number;
     invoiceTransitions: Array<{ from: string; to: string; disallowedInputTaxRate: number }>;
   };
   sources: Array<{ name: string; revision: string; pages: string }>;
+}
+
+export interface ShoppingMallInvitationEstimate {
+  productCode: string;
+  productName: string;
+  course: CourseCode;
+  title: TitleCode;
+  orders: number;
+  standardPvPerOrder: number;
+  creditedPv: number;
+  firstLineRate: number;
+  salesBonusPerOrder: number;
+  pvBonusPerOrder: number;
+  grossBonusPerOrder: number;
+  salesBonus: number;
+  pvBonus: number;
+  grossBonus: number;
+  issueFee: number;
+  afterIssueFee: number;
 }
 
 export interface Member {
@@ -88,6 +140,11 @@ export interface Member {
   title: TitleCode;
   trainerCredential: TrainerCredential;
   sponsorLicense: boolean;
+  openStudioAttendances: number;
+  preTrainerCourseCompleted: boolean;
+  preTrainerKitPurchased: boolean;
+  startTrainerCourseCompleted: boolean;
+  startTrainerKitPurchased: boolean;
   directorPromotedPeriod: string | null;
   joinedPeriod: string;
   endedPeriod: string | null;
@@ -133,8 +190,10 @@ export interface SimulationMember {
   displayName: string;
   parentMemberId: string;
   introducerMemberId: string;
+  masterMemberId: string | null;
   trainerMemberId: string | null;
   trainerBonusRole: TrainerBonusRole | null;
+  idKind: IdKind;
   course: CourseCode;
   period: string;
   createdAt: string;
@@ -147,6 +206,8 @@ export interface SimulationOrganization {
     actual: BonusBreakdown;
     simulated: BonusBreakdown;
     delta: PlacementBonusDelta;
+    actualOwnedIdCount: number;
+    simulatedOwnedIdCount: number;
   };
 }
 
@@ -179,11 +240,34 @@ export interface TitleChecklistItem {
   }>;
 }
 
+export interface TrainerQualificationChecklistItem {
+  code: Exclude<TrainerCredential, "NONE">;
+  label: string;
+  rank: number;
+  status: "achieved" | "next" | "future";
+  progress: number;
+  conditions: ConditionResult[];
+  bonuses: Array<{ courseLabel: string; solo: number; withPreTrainer: number | null }>;
+}
+
+export interface TrainerQualificationProfile {
+  memberId: string;
+  trainerCredential: TrainerCredential;
+  sponsorLicense: boolean;
+  openStudioAttendances: number;
+  preTrainerCourseCompleted: boolean;
+  preTrainerKitPurchased: boolean;
+  startTrainerCourseCompleted: boolean;
+  startTrainerKitPurchased: boolean;
+}
+
 export interface TitleChecklistData {
   period: string;
   achievedTitle: TitleCode;
   planVersion: string;
   titles: TitleChecklistItem[];
+  trainerQualifications: TrainerQualificationChecklistItem[];
+  trainerProfile: TrainerQualificationProfile;
   sources: PlanConfig["sources"];
 }
 
@@ -216,10 +300,13 @@ export interface Mission {
 export interface SimulationRequest {
   candidateName: string;
   course: CourseCode;
+  idKind: IdKind;
   period: string;
   targetTitle: TitleCode;
   placementCandidateIds?: string[];
   trainerBonusRole?: TrainerBonusRole | null;
+  incomeMode?: "self" | "pair";
+  partnerMemberId?: string | null;
   taxProfile: TaxProfile;
 }
 
@@ -235,6 +322,28 @@ export interface PlacementBonusDelta {
   estimatedNet: number;
 }
 
+export interface PlacementIncomeOwner {
+  memberId: string;
+  memberName: string;
+  before: BonusBreakdown;
+  after: BonusBreakdown;
+  delta: PlacementBonusDelta;
+}
+
+export interface PlacementIncomeComparison {
+  mode: "self" | "pair";
+  self: PlacementIncomeOwner;
+  partner: PlacementIncomeOwner | null;
+  combined: {
+    beforeGross: number;
+    afterGross: number;
+    grossDelta: number;
+    beforeEstimatedNet: number;
+    afterEstimatedNet: number;
+    estimatedNetDelta: number;
+  };
+}
+
 export interface PlacementResult {
   placementMemberId: string;
   placementMemberName: string;
@@ -243,18 +352,21 @@ export interface PlacementResult {
   grossDelta: number;
   estimatedNetDelta: number;
   bonusDelta: PlacementBonusDelta;
+  incomeComparison: PlacementIncomeComparison;
   titleBefore: TitleCode;
   titleAfter: TitleCode;
   missingBefore: number;
   missingAfter: number;
   earliestAchievementPeriod: string | null;
+  ownedIdCountBefore: number;
+  ownedIdCountAfter: number;
   reasons: string[];
   warnings: string[];
 }
 
 export interface ForecastMonthlyInput {
   period: string;
-  registrations: Array<{ course: CourseCode; placementMemberId: string; count: number }>;
+  registrations: Array<{ course: CourseCode; placementMemberId: string; count: number; trainerBonusRole?: TrainerBonusRole | null }>;
   continuationRate: number;
   additionalPv: number;
   teamActivityRate: number;
@@ -280,6 +392,7 @@ export interface ForecastResult {
     title: TitleCode;
     gross: number;
     estimatedNet: number;
+    ownedIdCount: number;
     directRegistrations: number;
     teamRegistrations: number;
     retainedMembers: number;
@@ -305,5 +418,6 @@ export interface DashboardData {
   groupMembers: number;
   title: TitleEvaluation;
   bonus: BonusBreakdown;
+  ownedIdCount: number;
   missions: Mission[];
 }

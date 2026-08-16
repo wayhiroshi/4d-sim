@@ -8,6 +8,7 @@ import {
   type ForecastResult,
   type ForecastScenario,
   type Goal,
+  type IdKind,
   type Member,
   type OrganizationSnapshot,
   type PlacementResult,
@@ -15,6 +16,9 @@ import {
   type SimulationOrganization,
   type TaxProfile,
   type TrainerBonusRole,
+  type TrainerCredential,
+  type TrainerQualificationChecklistItem,
+  type TrainerQualificationProfile,
   type TitleChecklistItem,
   type TitleCode
 } from "./shared/types";
@@ -28,17 +32,23 @@ const TRAINER_ROLE_OPTIONS: Array<{ value: "" | TrainerBonusRole; label: string 
   { value: "ST_SOLO", label: "自分がSトレーナーとして単独担当" },
   { value: "ST_WITH_PT", label: "自分がSトレーナーとしてPトレと同時担当" }
 ];
+const trainerRoleAvailable = (credential: TrainerCredential, role: "" | TrainerBonusRole): boolean => {
+  if (role === "") return true;
+  if (role === "PT") return credential !== "NONE";
+  return credential === "ST";
+};
 type ForecastScenarioId = ForecastScenario["id"];
 type ForecastSetting = {
   direct: number; retention: number; course: CourseCode; placement: string; additionalPv: number;
+  trainerBonusRole: TrainerBonusRole | null;
   teamActivity: number; introductionsPerActiveMember: number; maxTeamRegistrations: number;
 };
 const FORECAST_IDS: ForecastScenarioId[] = ["conservative", "standard", "challenge"];
 const FORECAST_LABELS: Record<ForecastScenarioId, string> = { conservative: "想定より悪い", standard: "現実ライン", challenge: "目標ライン" };
 const DEFAULT_FORECAST_SETTINGS: Record<ForecastScenarioId, ForecastSetting> = {
-  conservative: { direct: 0, retention: 75, course: "A", placement: "root", additionalPv: 0, teamActivity: 0, introductionsPerActiveMember: 0, maxTeamRegistrations: 0 },
-  standard: { direct: 1, retention: 85, course: "A", placement: "root", additionalPv: 0, teamActivity: 10, introductionsPerActiveMember: 0.5, maxTeamRegistrations: 5 },
-  challenge: { direct: 2, retention: 95, course: "G", placement: "root", additionalPv: 0, teamActivity: 25, introductionsPerActiveMember: 1, maxTeamRegistrations: 15 }
+  conservative: { direct: 0, retention: 75, course: "A", placement: "root", additionalPv: 0, trainerBonusRole: null, teamActivity: 0, introductionsPerActiveMember: 0, maxTeamRegistrations: 0 },
+  standard: { direct: 1, retention: 85, course: "A", placement: "root", additionalPv: 0, trainerBonusRole: null, teamActivity: 10, introductionsPerActiveMember: 0.5, maxTeamRegistrations: 5 },
+  challenge: { direct: 2, retention: 95, course: "G", placement: "root", additionalPv: 0, trainerBonusRole: null, teamActivity: 25, introductionsPerActiveMember: 1, maxTeamRegistrations: 15 }
 };
 
 function useLoad<T>(loader: () => Promise<T>, deps: unknown[] = []) {
@@ -108,7 +118,7 @@ function Dashboard() {
         <div className="metric-grid">
           <Metric label="グループ p.v." value={`${number.format(data.groupPv)} p.v.`} accent />
           <Metric label="グループ人数" value={`${number.format(data.groupMembers)}人`} />
-          <Metric label="総ボーナス" value={yen.format(data.bonus.gross)} />
+          <Metric label={data.ownedIdCount > 1 ? `総ボーナス（計${data.ownedIdCount}ID）` : "総ボーナス"} value={yen.format(data.bonus.gross)} />
           <Metric label="概算手取" value={yen.format(data.bonus.estimatedNet)} />
         </div>
         <section className="simulation-actions" aria-label="主な試算">
@@ -142,6 +152,8 @@ function Organization() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [manualIdKind, setManualIdKind] = useState<IdKind>("master");
+  const [trialIdKind, setTrialIdKind] = useState<IdKind>("master");
   const snapshot = data?.snapshot ?? null;
   const trialIds = useMemo(() => new Set(data?.simulationMembers.map((member) => member.id) ?? []), [data]);
   const actualMembers = snapshot?.members.filter((member) => !trialIds.has(member.id) && member.endedPeriod === null) ?? [];
@@ -153,12 +165,15 @@ function Organization() {
     try {
       const member = await api.createMember({
         displayName: String(values.get("name")), parentMemberId: String(values.get("parent")),
-        introducerMemberId: String(values.get("introducer")), masterMemberId: null, trainerMemberId: null,
-        idKind: "master", course: String(values.get("course")) as CourseCode, title: "NONE",
-        trainerCredential: "NONE", sponsorLicense: false, directorPromotedPeriod: null,
+        introducerMemberId: manualIdKind === "sub" ? rootMember.id : String(values.get("introducer")),
+        masterMemberId: manualIdKind === "sub" ? rootMember.id : null, trainerMemberId: null,
+        idKind: manualIdKind, course: String(values.get("course")) as CourseCode, title: "NONE",
+        trainerCredential: "NONE", sponsorLicense: false,
+        openStudioAttendances: 0, preTrainerCourseCompleted: false, preTrainerKitPurchased: false,
+        startTrainerCourseCompleted: false, startTrainerKitPurchased: false, directorPromotedPeriod: null,
         joinedPeriod: snapshot.period, endedPeriod: null
       });
-      form.reset(); setSelectedId(member.id); setMessage(`${member.displayName}をNavigator内の実組織へ追加しました`); reload();
+      form.reset(); setManualIdKind("master"); setSelectedId(member.id); setMessage(`${member.displayName}をNavigator内の実組織へ追加しました`); reload();
     } catch (reason) { setMessage(reason instanceof Error ? reason.message : "追加できませんでした"); }
     finally { setBusy(false); }
   };
@@ -174,9 +189,10 @@ function Organization() {
         course: String(values.get("course")) as CourseCode,
         parentMemberId: String(values.get("parent")),
         period: snapshot.period,
+        idKind: trialIdKind,
         trainerBonusRole: String(values.get("trainerRole")) as TrainerBonusRole || null
       });
-      form.reset();
+      form.reset(); setTrialIdKind("master");
       setMessage("仮メンバーを試算中の組織へ追加しました");
       reload();
     } catch (reason) { setMessage(reason instanceof Error ? reason.message : "追加できませんでした"); }
@@ -194,9 +210,10 @@ function Organization() {
     <form className="panel manual-member-form" onSubmit={(event) => void addMember(event)}>
       <div className="manual-member-heading"><p className="eyebrow">APP MEMBER</p><h2>実メンバーを手動追加</h2><p>公式会員IDは不要です。会員サイトのスクショを見ながら入力でき、画像自体はNavigatorへ保存しません。</p></div>
       <label>アプリ内表示名<input name="name" required maxLength={80} placeholder="例：山田さん、Aさん" /></label>
+      <label>IDの扱い<select name="idKind" value={manualIdKind} onChange={(event) => setManualIdKind(event.target.value as IdKind)}><option value="master">通常の会員（マスターID）</option><option value="sub">自分のサブID</option></select><small className="field-note">サブIDは本人のマスターIDへ紐づけ、報酬を合算します</small></label>
       <label>コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label>
       <label>配置先<select name="parent" defaultValue={rootMember?.id}>{actualMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>
-      <label>紹介者<select name="introducer" defaultValue={rootMember?.id}>{actualMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>
+      {manualIdKind === "master" && <label>紹介者<select name="introducer" defaultValue={rootMember?.id}>{actualMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>}
       <button className="primary-button" disabled={busy || !rootMember}>{busy ? "追加中…" : "実組織へ追加"}</button>
       <p className="manual-member-note">この操作はNavigator内だけに保存され、フォーデイズ公式サイトの登録・配置は変更しません。</p>
     </form>
@@ -205,9 +222,10 @@ function Organization() {
     <form className="panel trial-form" onSubmit={(event) => void addTrial(event)}>
       <div><p className="eyebrow">MANUAL TRIAL</p><h2>仮メンバーを手動追加</h2></div>
       <label>試算上の名前<input name="name" required maxLength={80} placeholder={`仮メンバー${data.simulationMembers.length + 1}`} /></label>
+      <label>IDの扱い<select name="idKind" value={trialIdKind} onChange={(event) => setTrialIdKind(event.target.value as IdKind)}><option value="master">通常の新規会員</option><option value="sub">自分のサブID</option></select><small className="field-note">サブIDは通常5件まで。発生報酬は本人収入へ合算します</small></label>
       <label>コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label>
       <label>配置先<select name="parent">{snapshot?.members.filter((member) => member.endedPeriod === null).map((member) => <option key={member.id} value={member.id}>{trialIds.has(member.id) ? "【仮】" : ""}{member.displayName}</option>)}</select></label>
-      <label>Aさん役<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+      <label>Aさん役<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!trainerRoleAvailable(rootMember?.trainerCredential ?? "NONE", option.value)}>{option.label}</option>)}</select><small className="field-note">現在の登録資格：{!rootMember || rootMember.trainerCredential === "NONE" ? "未取得" : rootMember.trainerCredential}</small></label>
       <button className="secondary-button" disabled={busy}>{busy ? "反映中…" : "試算組織へ追加"}</button>
     </form>
     {message && <p className="status-message">{message}</p>}
@@ -222,7 +240,7 @@ function Organization() {
 
 function TrialBonusSummary({ comparison, count }: { comparison: SimulationOrganization["bonusComparison"]; count: number }) {
   const signedYen = (value: number) => `${value >= 0 ? "+" : ""}${yen.format(value)}`;
-  return <section className="panel trial-bonus-summary"><div className="panel-title"><div><p className="eyebrow">TRIAL REWARD</p><h2>仮配置後の報酬試算</h2></div><span className="status-chip">仮{count}人を反映</span></div><div className="trial-bonus-metrics"><div><small>登録月の総ボーナス</small><strong>{yen.format(comparison.simulated.gross)}</strong></div><div><small>実組織との差</small><strong className={comparison.delta.gross >= 0 ? "positive" : "negative"}>{signedYen(comparison.delta.gross)}</strong></div><div><small>概算振込額</small><strong>{yen.format(comparison.simulated.estimatedNet)}</strong></div><div><small>概算振込額の差</small><strong className={comparison.delta.estimatedNet >= 0 ? "positive" : "negative"}>{signedYen(comparison.delta.estimatedNet)}</strong></div></div><BonusDeltaDetails delta={comparison.delta} /><p className="warning">仮メンバー全員の初回・定期購入相当を現在営業月へ反映した参考試算です。公式登録・報酬明細は変更しません。</p></section>;
+  return <section className="panel trial-bonus-summary"><div className="panel-title"><div><p className="eyebrow">TRIAL REWARD</p><h2>仮配置後の報酬試算</h2><small>本人の保有IDを{comparison.actualOwnedIdCount}ID → {comparison.simulatedOwnedIdCount}IDとして合算</small></div><span className="status-chip">仮{count}人を反映</span></div><div className="trial-bonus-metrics"><div><small>登録月の総ボーナス</small><strong>{yen.format(comparison.simulated.gross)}</strong></div><div><small>実組織との差</small><strong className={comparison.delta.gross >= 0 ? "positive" : "negative"}>{signedYen(comparison.delta.gross)}</strong></div><div><small>概算振込額</small><strong>{yen.format(comparison.simulated.estimatedNet)}</strong></div><div><small>概算振込額の差</small><strong className={comparison.delta.estimatedNet >= 0 ? "positive" : "negative"}>{signedYen(comparison.delta.estimatedNet)}</strong></div></div><BonusDeltaDetails delta={comparison.delta} /><p className="warning">仮メンバー全員の初回・定期購入相当を現在営業月へ反映した参考試算です。サブID分は本人収入へ合算します。公式登録・報酬明細は変更しません。</p></section>;
 }
 
 function TreeNode({ member, snapshot, simulationIds, depth, selectedId, onSelect }: { member: Member; snapshot: OrganizationSnapshot; simulationIds: Set<string>; depth: number; selectedId: string | null; onSelect: (id: string) => void }) {
@@ -235,7 +253,7 @@ function TreeNode({ member, snapshot, simulationIds, depth, selectedId, onSelect
     .reduce((sum, purchase) => sum + purchase.pv * purchase.quantity, 0);
   return <div className="tree-branch" style={{ "--depth": depth } as React.CSSProperties}>
     <button className={`member-node${selectedId === member.id ? " selected" : ""}${simulationIds.has(member.id) ? " simulation" : ""}`} aria-expanded={children.length > 0 ? expanded : undefined} aria-controls={children.length > 0 ? childrenId : undefined} onClick={() => { onSelect(member.id); if (children.length > 0) setExpanded((current) => !current); }}>
-      <span className={`course course-${member.course}`}>{member.course}</span><span className="member-node-content"><strong>{member.displayName}{simulationIds.has(member.id) && <em className="trial-tag">仮</em>}</strong><small>{number.format(pv)} p.v. · {member.title}</small></span>
+      <span className={`course course-${member.course}`}>{member.course}</span><span className="member-node-content"><strong>{member.displayName}{member.idKind === "sub" && <em className="trial-tag">サブ</em>}{simulationIds.has(member.id) && <em className="trial-tag">仮</em>}</strong><small>{number.format(pv)} p.v. · {member.title}</small></span>
       {children.length > 0 && <span className={`tree-toggle${expanded ? " expanded" : ""}`} aria-hidden="true"><small>{children.length}人</small><b>⌄</b></span>}
     </button>
     {children.length > 0 && expanded && <div className="tree-children" id={childrenId}>{children.map((child) => <TreeNode key={child.id} member={child} snapshot={snapshot} simulationIds={simulationIds} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />)}</div>}
@@ -273,15 +291,24 @@ function Products() {
 function Simulator() {
   const tree = useLoad(api.simulationOrganization, []); const tax = useLoad(api.tax, []); const goal = useLoad(api.goal, []);
   const [results, setResults] = useState<PlacementResult[]>([]); const [busy, setBusy] = useState(false); const [savingId, setSavingId] = useState<string | null>(null); const [error, setError] = useState<string | null>(null); const [message, setMessage] = useState<string | null>(null);
-  const [candidate, setCandidate] = useState<{ name: string; course: CourseCode; trainerBonusRole: TrainerBonusRole | null } | null>(null);
+  const [incomeMode, setIncomeMode] = useState<"self" | "pair">("self"); const [partnerMemberId, setPartnerMemberId] = useState("");
+  const [candidate, setCandidate] = useState<{ name: string; course: CourseCode; idKind: IdKind; trainerBonusRole: TrainerBonusRole | null } | null>(null);
   const snapshot = tree.data?.snapshot ?? null;
-  const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!tax.data || !goal.data || !snapshot) return; setBusy(true); setError(null); setMessage(null); const values = new FormData(event.currentTarget); const nextCandidate = { name: String(values.get("name")), course: String(values.get("course")) as CourseCode, trainerBonusRole: String(values.get("trainerRole")) as TrainerBonusRole || null }; try { const response = await api.simulate({ candidateName: nextCandidate.name, course: nextCandidate.course, trainerBonusRole: nextCandidate.trainerBonusRole, period: snapshot.period, targetTitle: goal.data.targetTitle, taxProfile: tax.data }); setCandidate(nextCandidate); setResults(response.results); } catch (reason) { setError(reason instanceof Error ? reason.message : "計算できませんでした"); } finally { setBusy(false); } };
-  const addPlacement = async (result: PlacementResult) => { if (!candidate || !snapshot) return; setSavingId(result.placementMemberId); setError(null); try { await api.createSimulationMember({ displayName: candidate.name, course: candidate.course, trainerBonusRole: candidate.trainerBonusRole, parentMemberId: result.placementMemberId, period: snapshot.period }); setMessage(`${candidate.name}を${result.placementMemberName}配下の試算組織へ追加しました`); setResults([]); setCandidate(null); tree.reload(); } catch (reason) { setError(reason instanceof Error ? reason.message : "追加できませんでした"); } finally { setSavingId(null); } };
+  const rootMember = snapshot?.members.find((member) => member.parentMemberId === null) ?? null;
+  const partnerOptions = snapshot?.members.filter((member) => member.id !== rootMember?.id && member.idKind === "master" && member.masterMemberId === null && (member.endedPeriod === null || member.endedPeriod > snapshot.period) && !member.id.startsWith("trial-")) ?? [];
+  const selectedPartnerId = partnerMemberId || partnerOptions[0]?.id || "";
+  const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!tax.data || !goal.data || !snapshot) return; if (incomeMode === "pair" && !selectedPartnerId) { setError("2名合算で試算するパートナーを選択してください"); return; } setBusy(true); setError(null); setMessage(null); const values = new FormData(event.currentTarget); const nextCandidate = { name: String(values.get("name")), course: String(values.get("course")) as CourseCode, idKind: String(values.get("idKind")) as IdKind, trainerBonusRole: String(values.get("trainerRole")) as TrainerBonusRole || null }; try { const response = await api.simulate({ candidateName: nextCandidate.name, course: nextCandidate.course, idKind: nextCandidate.idKind, trainerBonusRole: nextCandidate.trainerBonusRole, incomeMode, partnerMemberId: incomeMode === "pair" ? selectedPartnerId : null, period: snapshot.period, targetTitle: goal.data.targetTitle, taxProfile: tax.data }); setCandidate(nextCandidate); setResults(response.results); } catch (reason) { setError(reason instanceof Error ? reason.message : "計算できませんでした"); } finally { setBusy(false); } };
+  const addPlacement = async (result: PlacementResult) => { if (!candidate || !snapshot) return; setSavingId(result.placementMemberId); setError(null); try { await api.createSimulationMember({ displayName: candidate.name, course: candidate.course, idKind: candidate.idKind, trainerBonusRole: candidate.trainerBonusRole, parentMemberId: result.placementMemberId, period: snapshot.period }); setMessage(`${candidate.name}を${result.placementMemberName}配下の試算組織へ追加しました`); setResults([]); setCandidate(null); tree.reload(); } catch (reason) { setError(reason instanceof Error ? reason.message : "追加できませんでした"); } finally { setSavingId(null); } };
   return <PageState loading={tree.loading || tax.loading || goal.loading} error={tree.error || tax.error || goal.error}>{snapshot && <><PageHeading kicker="PLACEMENT QUEST" title="配置シミュレーター" description="仮メンバーを追加しながら、複数人を順番に当てはめられます" />
     <section className="trial-banner"><div><strong>試算中 {tree.data?.simulationMembers.length ?? 0}人</strong><small>追加済みの仮メンバーを含めて次の配置を再計算します。</small></div><NavLink to="/organization" className="text-button">組織で確認</NavLink></section>
-    <form className="panel simulator-form" onSubmit={(event) => void submit(event)}><label>試算上の名前<input name="name" required placeholder={`例：仮メンバー${(tree.data?.simulationMembers.length ?? 0) + 1}`} /><small className="field-note">配置確定ボタンを押した場合だけ試算用として保存します</small></label><label>希望コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label><label>Aさん役（トレーナー応援）<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small className="field-note">資格を有し、申請書に記載される場合だけ対象</small></label><button className="primary-button" disabled={busy}>{busy ? "全配置を計算中…" : "おすすめ配置を計算"}</button></form>{error && <div className="state-card error">{error}</div>}{message && <p className="status-message">{message}。続けて次の人を試算できます。</p>}
-    <div className="results-list">{results.map((result) => <article className={`placement-card rank-${result.rank}`} key={result.placementMemberId}><div className="rank-badge">#{result.rank ?? "-"}</div><div className="placement-heading"><div><small>おすすめ配置</small><h2>{result.placementMemberName} 配下</h2></div><div className="placement-amount"><small>登録月の総額差</small><strong className={result.grossDelta >= 0 ? "positive" : "negative"}>{result.grossDelta >= 0 ? "+" : ""}{yen.format(result.grossDelta)}</strong></div></div><div className="result-stats"><span>タイトル {result.titleBefore} → {result.titleAfter}</span><span>未達 {result.missingBefore} → {result.missingAfter}</span></div><BonusBreakdownDetails result={result} /><ul>{result.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><button className="primary-button placement-save" disabled={!result.eligible || savingId !== null} onClick={() => void addPlacement(result)}>{savingId === result.placementMemberId ? "試算組織へ追加中…" : "この配置を試算組織へ追加"}</button><p className="warning">{result.warnings.join(" / ")}</p></article>)}</div>
+    <form className="panel simulator-form" onSubmit={(event) => void submit(event)}><label>試算上の名前<input name="name" required placeholder={`例：仮メンバー${(tree.data?.simulationMembers.length ?? 0) + 1}`} /><small className="field-note">配置確定ボタンを押した場合だけ試算用として保存します</small></label><label>IDの扱い<select name="idKind" defaultValue="master"><option value="master">通常の新規会員</option><option value="sub">自分のサブID</option></select><small className="field-note">サブIDの報酬は本人のメインIDへ合算</small></label><label>希望コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label><label>Aさん役（トレーナー応援）<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!trainerRoleAvailable(rootMember?.trainerCredential ?? "NONE", option.value)}>{option.label}</option>)}</select><small className="field-note">現在の登録資格：{rootMember?.trainerCredential === "NONE" ? "未取得" : rootMember?.trainerCredential}。資格を有し、申請書に記載される場合だけ対象</small></label><label>収入の見方<select value={incomeMode} onChange={(event) => { setIncomeMode(event.target.value as "self" | "pair"); setResults([]); }}><option value="self">自分のみ</option><option value="pair">自分＋パートナー（2名合算）</option></select><small className="field-note">2名合算でも明細・控除は1人ずつ計算します</small></label>{incomeMode === "pair" && <label>合算するパートナー<select value={selectedPartnerId} disabled={!partnerOptions.length} onChange={(event) => { setPartnerMemberId(event.target.value); setResults([]); }}>{partnerOptions.length ? partnerOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}（{member.course}）</option>) : <option value="">対象メンバーがいません</option>}</select><small className="field-note">有効なマスターIDから選択。本人のサブIDは本人分に含まれます</small></label>}<button className="primary-button" disabled={busy || (incomeMode === "pair" && !selectedPartnerId)}>{busy ? "全配置を計算中…" : "おすすめ配置を計算"}</button></form>{error && <div className="state-card error">{error}</div>}{message && <p className="status-message">{message}。続けて次の人を試算できます。</p>}
+    <div className="results-list">{results.map((result) => { const displayedDelta = result.incomeComparison.combined.grossDelta; return <article className={`placement-card rank-${result.rank}`} key={result.placementMemberId}><div className="rank-badge">#{result.rank ?? "-"}</div><div className="placement-heading"><div><small>おすすめ配置</small><h2>{result.placementMemberName} 配下</h2></div><div className="placement-amount"><small>{result.incomeComparison.mode === "pair" ? "2名合計の登録月差" : "登録月の総額差"}</small><strong className={displayedDelta >= 0 ? "positive" : "negative"}>{displayedDelta >= 0 ? "+" : ""}{yen.format(displayedDelta)}</strong></div></div><div className="result-stats"><span>タイトル {result.titleBefore} → {result.titleAfter}</span><span>未達 {result.missingBefore} → {result.missingAfter}</span>{result.ownedIdCountAfter !== result.ownedIdCountBefore && <span>本人保有 {result.ownedIdCountBefore} → {result.ownedIdCountAfter}ID</span>}</div>{result.incomeComparison.mode === "pair" && <PairIncomeBreakdown comparison={result.incomeComparison} />}<BonusBreakdownDetails result={result} /><ul>{result.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><button className="primary-button placement-save" disabled={!result.eligible || savingId !== null} onClick={() => void addPlacement(result)}>{savingId === result.placementMemberId ? "試算組織へ追加中…" : "この配置を試算組織へ追加"}</button><p className="warning">{result.warnings.join(" / ")}</p></article>; })}</div>
   </>}</PageState>;
+}
+
+function PairIncomeBreakdown({ comparison }: { comparison: PlacementResult["incomeComparison"] }) {
+  const owners = [comparison.self, comparison.partner].filter((owner): owner is NonNullable<typeof owner> => owner !== null);
+  return <section className="pair-income"><div className="pair-income-heading"><strong>2名の収入内訳</strong><small>各人を個別計算して合算</small></div>{owners.map((owner) => <div className="pair-income-row" key={owner.memberId}><div><strong>{owner.memberName}</strong><small>総ボーナス {yen.format(owner.before.gross)} → {yen.format(owner.after.gross)}</small><small>概算振込 {yen.format(owner.before.estimatedNet)} → {yen.format(owner.after.estimatedNet)}</small></div><b className={owner.delta.gross >= 0 ? "positive" : "negative"}>{owner.delta.gross >= 0 ? "+" : ""}{yen.format(owner.delta.gross)}</b></div>)}<div className="pair-income-total"><div><strong>2名合計</strong><small>総ボーナス {yen.format(comparison.combined.beforeGross)} → {yen.format(comparison.combined.afterGross)}</small><small>概算振込 {yen.format(comparison.combined.beforeEstimatedNet)} → {yen.format(comparison.combined.afterEstimatedNet)}</small></div><b className={comparison.combined.grossDelta >= 0 ? "positive" : "negative"}>{comparison.combined.grossDelta >= 0 ? "+" : ""}{yen.format(comparison.combined.grossDelta)}</b></div></section>;
 }
 
 function BonusBreakdownDetails({ result }: { result: PlacementResult }) {
@@ -298,6 +325,7 @@ function Forecast() {
   const [results, setResults] = useState<ForecastResult[]>([]); const [busy, setBusy] = useState(false);
   const [saveName, setSaveName] = useState(""); const [message, setMessage] = useState<string | null>(null); const [error, setError] = useState<string | null>(null);
   const availableMembers = tree.data?.members.filter((member) => member.endedPeriod === null) ?? [];
+  const rootTrainerCredential = tree.data?.members.find((member) => member.parentMemberId === null)?.trainerCredential ?? "NONE";
   const updateSetting = <K extends keyof ForecastSetting>(id: ForecastScenarioId, key: K, value: ForecastSetting[K]) => setSettings((current) => ({ ...current, [id]: { ...current[id], [key]: value } }));
   const buildScenarios = (): ForecastScenario[] => {
     if (!tree.data || !tax.data) return [];
@@ -309,7 +337,7 @@ function Forecast() {
         const period = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2,"0")}`;
         const setting = settings[id];
         return {
-          period, registrations: [{ course: setting.course, placementMemberId: setting.placement, count: setting.direct }],
+          period, registrations: [{ course: setting.course, placementMemberId: setting.placement, count: setting.direct, trainerBonusRole: setting.trainerBonusRole }],
           continuationRate: setting.retention / 100, additionalPv: setting.additionalPv,
           teamActivityRate: setting.teamActivity / 100, introductionsPerActiveMember: setting.introductionsPerActiveMember,
           maxTeamRegistrations: setting.maxTeamRegistrations
@@ -341,6 +369,7 @@ function Forecast() {
       next[scenario.id] = {
         direct: registration?.count ?? 0, retention: Math.round(month.continuationRate * 100), course: registration?.course ?? "A",
         placement: registration?.placementMemberId ?? "root", additionalPv: month.additionalPv,
+        trainerBonusRole: registration?.trainerBonusRole ?? null,
         teamActivity: Math.round(month.teamActivityRate * 100), introductionsPerActiveMember: month.introductionsPerActiveMember,
         maxTeamRegistrations: month.maxTeamRegistrations
       };
@@ -356,9 +385,9 @@ function Forecast() {
   const maxMembers = Math.max(...endValues.map((month) => month.groupMembers), 1);
   return <PageState loading={tree.loading || tax.loading || saved.loading} error={tree.error || tax.error || saved.error}>{tree.data && <><PageHeading kicker="FUTURE MAP" title="条件付き将来試算" description="悪い場合・現実ライン・目標ラインを同じ前提項目で比較します" />
     <section className="forecast-guidance"><strong>夢の数字にしないための見方</strong><p>「本人が紹介する人数」と「チームから生まれる人数」を分けています。チーム新規は、今月継続しているメンバーが翌月以降に紹介を増やす前提で計算します。</p></section>
-    <section className="panel forecast-controls"><div className="segment">{[[3,"3か月"],[6,"6か月"],[12,"1年"]].map(([value,label]) => <button type="button" key={value} className={horizon === value ? "active" : ""} onClick={() => setHorizon(Number(value))}>{label}</button>)}</div><p className="input-note">各欄は毎月共通の前提です。月ごとの実績とずれたら保存案を更新せず、新しい案として残せます。</p><div className="scenario-inputs">{FORECAST_IDS.map((id) => { const setting = settings[id]; return <div className={`scenario-${id}`} key={id}><h3>{FORECAST_LABELS[id]}</h3><p>{id === "conservative" ? "想定どおり進まなかった場合" : id === "standard" ? "無理なく継続できる中心計画" : "達成したい上振れ目標"}</p><label>自分の紹介／月<input type="number" min="0" max="50" value={setting.direct} onChange={(event) => updateSetting(id, "direct", Number(event.target.value))} /></label><label>継続率<input type="number" min="0" max="100" value={setting.retention} onChange={(event) => updateSetting(id, "retention", Number(event.target.value))} />%</label><label>チーム活動率<input type="number" min="0" max="100" value={setting.teamActivity} onChange={(event) => updateSetting(id, "teamActivity", Number(event.target.value))} /><small className="field-note">継続者のうち紹介活動する割合</small></label><label>活動者1人の紹介数<input type="number" min="0" max="3" step="0.1" value={setting.introductionsPerActiveMember} onChange={(event) => updateSetting(id, "introductionsPerActiveMember", Number(event.target.value))} /></label><label>チーム新規の月上限<input type="number" min="0" max="50" value={setting.maxTeamRegistrations} onChange={(event) => updateSetting(id, "maxTeamRegistrations", Number(event.target.value))} /><small className="field-note">急な指数増加を抑える安全弁</small></label><label>コース<select value={setting.course} onChange={(event) => updateSetting(id, "course", event.target.value as CourseCode)}>{COURSES.map((item) => <option key={item}>{item}</option>)}</select></label><label>自分紹介の配置先<select value={setting.placement} onChange={(event) => updateSetting(id, "placement", event.target.value)}>{availableMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label><label>本人追加p.v.／月<input type="number" min="0" value={setting.additionalPv} onChange={(event) => updateSetting(id, "additionalPv", Number(event.target.value))} /></label></div>; })}</div><button className="primary-button forecast-run" onClick={() => void run()} disabled={busy}>{busy ? "計算中…" : "3シナリオを比較"}</button></section>
+    <section className="panel forecast-controls"><div className="segment">{[[3,"3か月"],[6,"6か月"],[12,"1年"]].map(([value,label]) => <button type="button" key={value} className={horizon === value ? "active" : ""} onClick={() => setHorizon(Number(value))}>{label}</button>)}</div><p className="input-note">各欄は毎月共通の前提です。月ごとの実績とずれたら保存案を更新せず、新しい案として残せます。</p><div className="scenario-inputs">{FORECAST_IDS.map((id) => { const setting = settings[id]; return <div className={`scenario-${id}`} key={id}><h3>{FORECAST_LABELS[id]}</h3><p>{id === "conservative" ? "想定どおり進まなかった場合" : id === "standard" ? "無理なく継続できる中心計画" : "達成したい上振れ目標"}</p><label>自分の紹介／月<input type="number" min="0" max="50" value={setting.direct} onChange={(event) => updateSetting(id, "direct", Number(event.target.value))} /></label><label>継続率<input type="number" min="0" max="100" value={setting.retention} onChange={(event) => updateSetting(id, "retention", Number(event.target.value))} />%</label><label>チーム活動率<input type="number" min="0" max="100" value={setting.teamActivity} onChange={(event) => updateSetting(id, "teamActivity", Number(event.target.value))} /><small className="field-note">継続者のうち紹介活動する割合</small></label><label>活動者1人の紹介数<input type="number" min="0" max="3" step="0.1" value={setting.introductionsPerActiveMember} onChange={(event) => updateSetting(id, "introductionsPerActiveMember", Number(event.target.value))} /></label><label>チーム新規の月上限<input type="number" min="0" max="50" value={setting.maxTeamRegistrations} onChange={(event) => updateSetting(id, "maxTeamRegistrations", Number(event.target.value))} /><small className="field-note">急な指数増加を抑える安全弁</small></label><label>コース<select value={setting.course} onChange={(event) => updateSetting(id, "course", event.target.value as CourseCode)}>{COURSES.map((item) => <option key={item}>{item}</option>)}</select></label><label>自分紹介の配置先<select value={setting.placement} onChange={(event) => updateSetting(id, "placement", event.target.value)}>{availableMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label><label>自分紹介のトレーナー担当<select value={setting.trainerBonusRole ?? ""} onChange={(event) => updateSetting(id, "trainerBonusRole", event.target.value ? event.target.value as TrainerBonusRole : null)}>{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!trainerRoleAvailable(rootTrainerCredential, option.value)}>{option.label}</option>)}</select><small className="field-note">資格に応じて初回購入月へ加算</small></label><label>本人追加p.v.／月<input type="number" min="0" value={setting.additionalPv} onChange={(event) => updateSetting(id, "additionalPv", Number(event.target.value))} /></label></div>; })}</div><button className="primary-button forecast-run" onClick={() => void run()} disabled={busy}>{busy ? "計算中…" : "3シナリオを比較"}</button></section>
     {error && <div className="state-card error">{error}</div>}{message && <p className="status-message">{message}</p>}
-    {results.length > 0 && <><section className="panel forecast-comparison"><div className="panel-title"><h2>最終月の比較</h2><span className="status-chip">この前提なら</span></div>{results.map((result) => { const final = result.months.at(-1); if (!final) return null; const label = result.assumptionLoad === "low" ? "前提負荷 低" : result.assumptionLoad === "medium" ? "前提負荷 中" : "前提負荷 高"; return <div className="comparison-row" key={result.scenarioId}><div><strong>{FORECAST_LABELS[result.scenarioId]}</strong><small className={`assumption-${result.assumptionLoad}`}>{label}</small></div><div className="comparison-bar"><span style={{ width: `${Math.max(6, final.groupMembers / maxMembers * 100)}%` }} /></div><div><strong>{final.groupMembers}人・{final.title}</strong><small>{yen.format(final.gross)}／月</small></div></div>; })}</section><div className="forecast-grid">{results.map((result) => <article className={`panel forecast-result scenario-${result.scenarioId}`} key={result.scenarioId}><div className="forecast-result-heading"><div><h2>{FORECAST_LABELS[result.scenarioId]}</h2><span className={`assumption-${result.assumptionLoad}`}>前提負荷 {result.assumptionLoad === "low" ? "低" : result.assumptionLoad === "medium" ? "中" : "高"}</span></div><details><summary>前提の確認</summary>{result.assumptionNotes.map((note) => <p key={note}>{note}</p>)}</details></div>{result.months.map((month) => <div className="forecast-row" key={month.period}><div><strong>{month.period}</strong><small>{month.title} · 組織{month.groupMembers}人 · 継続{month.retainedMembers}人</small><small>新規：本人{month.directRegistrations}人＋チーム{month.teamRegistrations}人</small></div><div><strong>{number.format(month.groupPv)} p.v.</strong><small>総ボーナス {yen.format(month.gross)}</small><small>概算振込 {yen.format(month.estimatedNet)}</small></div></div>)}</article>)}</div><section className="panel forecast-save"><div><h2>この3案を保存</h2><p>入力前提と計算結果をセットで残します。</p></div><label>保存名<input maxLength={80} value={saveName} onChange={(event) => setSaveName(event.target.value)} placeholder={`${tree.data.period}から${horizon}か月`} /></label><button className="primary-button" disabled={busy} onClick={() => void saveForecast()}>保存する</button></section></>}
+    {results.length > 0 && <><section className="panel forecast-comparison"><div className="panel-title"><h2>最終月の比較</h2><span className="status-chip">この前提なら</span></div>{results.map((result) => { const final = result.months.at(-1); if (!final) return null; const label = result.assumptionLoad === "low" ? "前提負荷 低" : result.assumptionLoad === "medium" ? "前提負荷 中" : "前提負荷 高"; return <div className="comparison-row" key={result.scenarioId}><div><strong>{FORECAST_LABELS[result.scenarioId]}</strong><small className={`assumption-${result.assumptionLoad}`}>{label}</small></div><div className="comparison-bar"><span style={{ width: `${Math.max(6, final.groupMembers / maxMembers * 100)}%` }} /></div><div><strong>{final.groupMembers}人・{final.title}</strong><small>{yen.format(final.gross)}／月 · 計{final.ownedIdCount}ID</small></div></div>; })}</section><div className="forecast-grid">{results.map((result) => <article className={`panel forecast-result scenario-${result.scenarioId}`} key={result.scenarioId}><div className="forecast-result-heading"><div><h2>{FORECAST_LABELS[result.scenarioId]}</h2><span className={`assumption-${result.assumptionLoad}`}>前提負荷 {result.assumptionLoad === "low" ? "低" : result.assumptionLoad === "medium" ? "中" : "高"}</span></div><details><summary>前提の確認</summary>{result.assumptionNotes.map((note) => <p key={note}>{note}</p>)}</details></div>{result.months.map((month) => <div className="forecast-row" key={month.period}><div><strong>{month.period}</strong><small>{month.title} · 組織{month.groupMembers}人 · 継続{month.retainedMembers}人</small><small>新規：本人{month.directRegistrations}人＋チーム{month.teamRegistrations}人 · 本人計{month.ownedIdCount}ID</small></div><div><strong>{number.format(month.groupPv)} p.v.</strong><small>総ボーナス {yen.format(month.gross)}（保有ID合算）</small><small>概算振込 {yen.format(month.estimatedNet)}</small></div></div>)}</article>)}</div><section className="panel forecast-save"><div><h2>この3案を保存</h2><p>入力前提と計算結果をセットで残します。</p></div><label>保存名<input maxLength={80} value={saveName} onChange={(event) => setSaveName(event.target.value)} placeholder={`${tree.data.period}から${horizon}か月`} /></label><button className="primary-button" disabled={busy} onClick={() => void saveForecast()}>保存する</button></section></>}
     <section className="panel saved-forecasts"><div className="panel-title"><h2>保存した将来試算</h2><span>{saved.data?.length ?? 0}件</span></div>{saved.data?.length ? saved.data.map((forecast) => <div className="saved-forecast-row" key={forecast.id}><button className="saved-forecast-open" onClick={() => loadForecast(forecast)}><strong>{forecast.name}</strong><small>{forecast.basePeriod}から{forecast.scenarios[0]?.months.length ?? 0}か月 · {new Date(forecast.updatedAt).toLocaleDateString("ja-JP")}</small></button><button className="text-button danger-text" onClick={() => void removeForecast(forecast)}>削除</button></div>) : <p className="muted">保存した試算はまだありません。</p>}</section><p className="disclaimer">これは入力した仮定に基づく条件付き試算です。将来の登録、継続、タイトル、報酬を保証しません。目標ラインだけでなく「想定より悪い」結果も行動計画に使ってください。</p>
   </>}</PageState>;
 }
@@ -396,12 +425,30 @@ function TitleConditions({ conditions }: { conditions: TitleChecklistItem["condi
   return <div className="title-condition-list">{conditions.map((condition) => <div className={condition.met ? "title-condition met" : "title-condition"} key={condition.key}><span>{condition.met ? "✓" : "!"}</span><div><strong>{condition.label}</strong><small>現在 {conditionValue(condition.current)} / 必要 {conditionValue(condition.required)}</small></div><em>{conditionShortage(condition)}</em></div>)}</div>;
 }
 
+function TitleReferenceCard({ title }: { title: TitleChecklistItem }) {
+  return <details className={`title-reference-card ${title.status}`} open={title.status === "next"}><summary><span className="title-code">{title.code}</span><div><strong>{title.label}</strong><small>{title.conditions.filter((condition) => !condition.met).length}件の未達条件</small></div><div className="title-progress"><strong>{title.progress}%</strong><span>{title.status === "achieved" ? "達成圏" : title.status === "next" ? "次の目標" : "参考"}</span></div></summary><div className="title-reference-body"><TitleConditions conditions={title.conditions} />{title.alternatives && <section className="alternative-section"><h3>いずれかの取得パターンを達成</h3><div className="alternative-grid">{title.alternatives.map((alternative) => <div className={alternative.met ? "alternative-card met" : "alternative-card"} key={alternative.label}><div className="alternative-heading"><strong>{alternative.label}</strong><span>{alternative.met ? "達成" : "未達"}</span></div><TitleConditions conditions={alternative.conditions} /></div>)}</div></section>}</div></details>;
+}
+
+function TrainerReferenceCard({ item }: { item: TrainerQualificationChecklistItem }) {
+  return <details className={`title-reference-card ${item.status}`} open={item.status === "next"}><summary><span className="title-code">{item.code}</span><div><strong>{item.label}</strong><small>{item.status === "achieved" ? "公式確認済み資格" : `トレーナー資格・${item.conditions.filter((condition) => !condition.met).length}件の未達条件`}</small></div><div className="title-progress"><strong>{item.progress}%</strong><span>{item.status === "achieved" ? "取得済み" : item.status === "next" ? "次の資格" : "参考"}</span></div></summary><div className="title-reference-body"><TitleConditions conditions={item.conditions} /><section className="alternative-section"><h3>初回購入1件あたりのトレーナーボーナス</h3><div className="alternative-grid">{item.bonuses.map((bonus) => <div className="alternative-card" key={bonus.courseLabel}><div className="alternative-heading"><strong>{bonus.courseLabel}コース</strong><span>{yen.format(bonus.solo)}</span></div>{bonus.withPreTrainer !== null && <small>Pトレーナーと同時担当時：{yen.format(bonus.withPreTrainer)}</small>}</div>)}</div></section></div></details>;
+}
+
+function TrainerProfileEditor({ initial, onSaved }: { initial: TrainerQualificationProfile; onSaved: () => void }) {
+  const [profile, setProfile] = useState(initial); const [saving, setSaving] = useState(false); const [message, setMessage] = useState<string | null>(null);
+  const set = <K extends keyof TrainerQualificationProfile>(key: K, value: TrainerQualificationProfile[K]) => setProfile((current) => ({ ...current, [key]: value }));
+  const save = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); setSaving(true); setMessage(null); try { await api.saveTrainerProfile(profile); setMessage("資格情報を保存しました"); onSaved(); } catch (reason) { setMessage(reason instanceof Error ? reason.message : "保存できませんでした"); } finally { setSaving(false); } };
+  return <form className="panel form-grid" onSubmit={(event) => void save(event)}><div className="span-2"><p className="eyebrow">TRAINER PROFILE</p><h2>P・Sトレーナー条件の入力</h2><p>公式画面・受講記録を確認して入力してください。取得済み資格が、トレーナーボーナス試算の可否判定に使われます。</p></div><label>公式確認済み資格<select value={profile.trainerCredential} onChange={(event) => set("trainerCredential", event.target.value as TrainerQualificationProfile["trainerCredential"])}><option value="NONE">未取得</option><option value="PT">Pトレーナー</option><option value="ST">Sトレーナー</option></select></label><label>オープンスタジオ出席回数<input type="number" min="0" max="999" value={profile.openStudioAttendances} onChange={(event) => set("openStudioAttendances", Number(event.target.value))} /></label><label className="check-label"><input type="checkbox" checked={profile.sponsorLicense} onChange={(event) => set("sponsorLicense", event.target.checked)} />スポンサーライセンス取得済み</label><label className="check-label"><input type="checkbox" checked={profile.preTrainerCourseCompleted} onChange={(event) => set("preTrainerCourseCompleted", event.target.checked)} />Pトレーナー講習会受講済み</label><label className="check-label"><input type="checkbox" checked={profile.preTrainerKitPurchased} onChange={(event) => set("preTrainerKitPurchased", event.target.checked)} />Pトレーナーキット購入済み</label><label className="check-label"><input type="checkbox" checked={profile.startTrainerCourseCompleted} onChange={(event) => set("startTrainerCourseCompleted", event.target.checked)} />Sトレーナー講習会受講済み</label><label className="check-label"><input type="checkbox" checked={profile.startTrainerKitPurchased} onChange={(event) => set("startTrainerKitPurchased", event.target.checked)} />Sトレーナーキット購入済み</label><div className="form-actions span-2"><button className="primary-button" disabled={saving}>{saving ? "保存中…" : "資格情報を保存"}</button>{message && <span className="status-message">{message}</span>}</div></form>;
+}
+
 function TitleReference() {
-  const { data, error, loading } = useLoad(api.titleChecklists, []);
+  const { data, error, loading, reload } = useLoad(api.titleChecklists, []);
+  const ld = data?.titles.find((title) => title.code === "LD");
+  const laterTitles = data?.titles.filter((title) => title.code !== "LD") ?? [];
   return <PageState loading={loading} error={error}>{data && <>
     <PageHeading kicker="REFERENCE" title="全タイトル条件" description="現在の組織と実績で、各タイトルまでの不足を確認します" />
     <section className="panel title-reference-summary"><div><small>現在タイトル</small><strong>{data.achievedTitle === "NONE" ? "未取得" : data.achievedTitle}</strong></div><div><small>対象営業月</small><strong>{data.period}</strong></div><div><small>ルール設定版</small><strong>{data.planVersion}</strong></div></section>
-    <div className="title-checklist">{data.titles.map((title) => <details className={`title-reference-card ${title.status}`} key={title.code} open={title.status === "next"}><summary><span className="title-code">{title.code}</span><div><strong>{title.label}</strong><small>{title.conditions.filter((condition) => !condition.met).length}件の未達条件</small></div><div className="title-progress"><strong>{title.progress}%</strong><span>{title.status === "achieved" ? "達成圏" : title.status === "next" ? "次の目標" : "参考"}</span></div></summary><div className="title-reference-body"><TitleConditions conditions={title.conditions} />{title.alternatives && <section className="alternative-section"><h3>いずれかの取得パターンを達成</h3><div className="alternative-grid">{title.alternatives.map((alternative) => <div className={alternative.met ? "alternative-card met" : "alternative-card"} key={alternative.label}><div className="alternative-heading"><strong>{alternative.label}</strong><span>{alternative.met ? "達成" : "未達"}</span></div><TitleConditions conditions={alternative.conditions} /></div>)}</div></section>}</div></details>)}</div>
+    <TrainerProfileEditor key={JSON.stringify(data.trainerProfile)} initial={data.trainerProfile} onSaved={reload} />
+    <div className="title-checklist">{ld && <TitleReferenceCard title={ld} />}{data.trainerQualifications.map((item) => <TrainerReferenceCard item={item} key={item.code} />)}{laterTitles.map((title) => <TitleReferenceCard title={title} key={title.code} />)}</div>
     <section className="panel source-panel"><h2>設定データの出典</h2>{data.sources.map((source) => <p key={`${source.name}-${source.revision}`}><strong>{source.name}</strong><span>{source.revision}・{source.pages}</span></p>)}</section>
     <p className="disclaimer">参考表示です。取得・維持の正式判定は最新の公式資料とフォーデイズ公式画面を優先してください。</p>
   </>}</PageState>;
