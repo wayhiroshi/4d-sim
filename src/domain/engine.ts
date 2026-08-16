@@ -1,6 +1,8 @@
 import { planConfig } from "./plan";
 import {
   TITLE_ORDER,
+  type BatchSimulationRequest,
+  type BatchSimulationResult,
   type BonusBreakdown,
   type ConditionResult,
   type CourseCode,
@@ -834,6 +836,85 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
   });
   eligible.forEach((item, index) => { item.rank = index + 1; });
   return results.sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER)).slice(0, 3);
+}
+
+export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request: BatchSimulationRequest): BatchSimulationResult {
+  if (!Number.isInteger(request.candidateCount) || request.candidateCount < 1 || request.candidateCount > 20) {
+    throw new Error("Batch candidate count must be between 1 and 20");
+  }
+  const root = snapshot.members.find((member) => member.parentMemberId === null);
+  if (!root) throw new Error("Root member is required");
+  const incomeMode = request.incomeMode ?? "self";
+  const partner = incomeMode === "pair"
+    ? snapshot.members.find((member) => member.id === request.partnerMemberId) ?? null
+    : null;
+  if (incomeMode === "pair" && (!partner || partner.id === root.id || partner.idKind !== "master" || partner.masterMemberId !== null || (partner.endedPeriod !== null && partner.endedPeriod <= snapshot.period))) {
+    throw new Error("An active partner master ID is required for pair income simulation");
+  }
+
+  const initialTitle = evaluateTitle(snapshot, root.id);
+  const initialBonus = computeBonus(snapshot, root.id, request.taxProfile);
+  const initialPartnerBonus = partner ? computeBonus(snapshot, partner.id, request.taxProfile) : null;
+  const ownedIdCountBefore = ownedIds(snapshot, root.id).length;
+  let working = snapshot;
+  const steps: BatchSimulationResult["steps"] = [];
+
+  for (let index = 0; index < request.candidateCount; index += 1) {
+    const candidateName = `${request.candidateName}${index + 1}`;
+    const stepRequest: SimulationRequest = { ...request, candidateName };
+    const best = simulatePlacements(working, stepRequest).find((result) => result.eligible);
+    if (!best) break;
+
+    let suffix = `batch-${index + 1}`;
+    let collision = 1;
+    while (working.members.some((member) => member.id === `simulation-${suffix}`)) {
+      suffix = `batch-${index + 1}-${collision}`;
+      collision += 1;
+    }
+    const candidateMemberId = `simulation-${suffix}`;
+    working = cloneWithCandidate(working, stepRequest, best.placementMemberId, suffix);
+    steps.push({
+      sequence: index + 1,
+      candidateMemberId,
+      candidateName,
+      placementMemberId: best.placementMemberId,
+      placementMemberName: best.placementMemberName,
+      titleBefore: best.titleBefore,
+      titleAfter: best.titleAfter,
+      missingBefore: best.missingBefore,
+      missingAfter: best.missingAfter,
+      grossDelta: best.incomeComparison.combined.grossDelta,
+      estimatedNetDelta: best.incomeComparison.combined.estimatedNetDelta
+    });
+  }
+
+  const finalTitle = evaluateTitle(working, root.id);
+  const finalBonus = computeBonus(working, root.id, request.taxProfile);
+  const finalPartnerBonus = partner ? computeBonus(working, partner.id, request.taxProfile) : null;
+  const incomeComparison = placementIncomeComparison(
+    incomeMode, root, initialBonus, finalBonus, partner, initialPartnerBonus, finalPartnerBonus
+  );
+  const placedCount = steps.length;
+  return {
+    strategy: "sequential",
+    requestedCount: request.candidateCount,
+    placedCount,
+    unplacedCount: request.candidateCount - placedCount,
+    steps,
+    titleBefore: initialTitle.achievedTitle,
+    titleAfter: finalTitle.achievedTitle,
+    missingBefore: missingCount(initialTitle),
+    missingAfter: missingCount(finalTitle),
+    ownedIdCountBefore,
+    ownedIdCountAfter: ownedIds(working, root.id).length,
+    bonusDelta: compareBonusBreakdowns(initialBonus, finalBonus),
+    incomeComparison,
+    warnings: [
+      "各1名を追加するたびに全配置候補を再計算する逐次最適配置です。全組合せの絶対的な最適解を保証するものではありません",
+      "参考シミュレーションです。公式登録や現在の試算組織は、この計算だけでは変更されません",
+      ...(placedCount < request.candidateCount ? [`配置上限またはサブID上限により${request.candidateCount - placedCount}人は配置できませんでした`] : [])
+    ]
+  };
 }
 
 export function generateMissions(title: TitleEvaluation): Mission[] {

@@ -13,6 +13,7 @@ import {
   ownedIds,
   periodForDate,
   runForecast,
+  simulateBatchPlacements,
   simulatePlacements
 } from "../src/domain/engine";
 import { planConfig } from "../src/domain/plan";
@@ -100,7 +101,7 @@ const purchaseSchema = z.object({
   pv: z.number().int().nonnegative()
 });
 
-const simulationSchema = z.object({
+const simulationInputSchema = z.object({
   candidateName: z.string().min(1).max(80),
   course: courseSchema,
   idKind: z.enum(["master", "sub"]).default("master"),
@@ -111,11 +112,16 @@ const simulationSchema = z.object({
   incomeMode: z.enum(["self", "pair"]).default("self"),
   partnerMemberId: z.string().min(1).max(80).nullable().default(null),
   taxProfile: taxProfileSchema
-}).superRefine((value, context) => {
+});
+const validatePairIncome = (value: z.infer<typeof simulationInputSchema>, context: z.RefinementCtx) => {
   if (value.incomeMode === "pair" && !value.partnerMemberId) {
     context.addIssue({ code: "custom", path: ["partnerMemberId"], message: "2名合算ではパートナーを選択してください" });
   }
-});
+};
+const simulationSchema = simulationInputSchema.superRefine(validatePairIncome);
+const batchSimulationSchema = simulationInputSchema.extend({
+  candidateCount: z.number().int().min(2).max(20)
+}).superRefine(validatePairIncome);
 
 const simulationMemberSchema = z.object({
   displayName: z.string().trim().min(1).max(80),
@@ -124,6 +130,17 @@ const simulationMemberSchema = z.object({
   course: courseSchema,
   idKind: z.enum(["master", "sub"]).default("master"),
   trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null)
+});
+const batchSimulationMemberSchema = z.object({
+  members: z.array(z.object({
+    tempId: z.string().min(1).max(120),
+    displayName: z.string().trim().min(1).max(80),
+    parentMemberId: z.string().min(1).max(120),
+    period: periodSchema,
+    course: courseSchema,
+    idKind: z.enum(["master", "sub"]),
+    trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable()
+  })).min(1).max(20)
 });
 const displayNameSchema = z.object({ displayName: z.string().trim().min(1).max(80) });
 const trainerProfileSchema = z.object({
@@ -336,6 +353,59 @@ app.post("/api/v1/simulation-members", async (context) => {
   return context.json(simulationMember, 201);
 });
 
+app.post("/api/v1/simulation-members/batch", async (context) => {
+  const input = await boundedJson(context.req.raw, batchSimulationMemberSchema);
+  const workspaceId = context.get("workspaceId");
+  if (new Set(input.members.map((member) => member.tempId)).size !== input.members.length) {
+    return context.json({ error: "一括配置内の仮IDが重複しています" }, 400);
+  }
+  const periods = new Set(input.members.map((member) => member.period));
+  if (periods.size !== 1) return context.json({ error: "一括配置は同じ営業月にしてください" }, 400);
+  const period = input.members[0]!.period;
+  const [actual, current] = await Promise.all([
+    loadSnapshot(context.env.DB, workspaceId, period),
+    listSimulationMembers(context.env.DB, workspaceId, period)
+  ]);
+  let working = applySimulationMembers(actual, current);
+  const root = working.members.find((member) => member.parentMemberId === null);
+  if (!root) return context.json({ error: "ルート会員が登録されていません" }, 409);
+  const resolvedIds = new Map<string, string>();
+  const created: SimulationMember[] = [];
+  const createdAt = Date.now();
+
+  for (const [index, item] of input.members.entries()) {
+    const parentMemberId = resolvedIds.get(item.parentMemberId) ?? item.parentMemberId;
+    const parent = working.members.find((member) => member.id === parentMemberId && member.endedPeriod === null);
+    if (!parent) return context.json({ error: `${index + 1}人目の配置先が存在しません` }, 400);
+    if (working.members.filter((member) => member.parentMemberId === parent.id && member.endedPeriod === null).length >= planConfig.firstLineLimit) {
+      return context.json({ error: `${index + 1}人目の配置先は1次ライン上限7名です` }, 400);
+    }
+    if (item.idKind === "sub" && ownedIds(working, root.id).length - 1 >= planConfig.maxSubIdsPerMaster) {
+      return context.json({ error: `${index + 1}人目はサブID上限を超えます` }, 400);
+    }
+    const member: SimulationMember = {
+      id: `trial-${crypto.randomUUID()}`,
+      workspaceId,
+      displayName: item.displayName,
+      parentMemberId: parent.id,
+      introducerMemberId: root.id,
+      masterMemberId: item.idKind === "sub" ? root.id : null,
+      trainerMemberId: item.trainerBonusRole ? root.id : null,
+      trainerBonusRole: item.trainerBonusRole,
+      idKind: item.idKind,
+      course: item.course,
+      period,
+      createdAt: new Date(createdAt + index).toISOString()
+    };
+    created.push(member);
+    resolvedIds.set(item.tempId, member.id);
+    working = applySimulationMembers(working, [member]);
+  }
+
+  await context.env.DB.batch(created.map((member) => simulationMemberInsert(context.env.DB, member)));
+  return context.json({ members: created }, 201);
+});
+
 app.delete("/api/v1/simulation-members", async (context) => {
   const period = periodSchema.parse(context.req.query("period"));
   const result = await context.env.DB.prepare(
@@ -462,6 +532,23 @@ app.post("/api/v1/simulations", async (context) => {
     if (invalidPartner) return context.json({ error: "選択したパートナーは2名合算の対象にできません" }, 400);
   }
   return context.json({ results: simulatePlacements(snapshot, request) });
+});
+
+app.post("/api/v1/simulations/batch", async (context) => {
+  const request = await boundedJson(context.req.raw, batchSimulationSchema);
+  const workspaceId = context.get("workspaceId");
+  const [actual, simulationMembers] = await Promise.all([
+    loadSnapshot(context.env.DB, workspaceId, request.period),
+    listSimulationMembers(context.env.DB, workspaceId, request.period)
+  ]);
+  const snapshot = applySimulationMembers(actual, simulationMembers);
+  if (request.incomeMode === "pair") {
+    const root = snapshot.members.find((member) => member.parentMemberId === null);
+    const partner = snapshot.members.find((member) => member.id === request.partnerMemberId);
+    const invalidPartner = !root || !partner || partner.id === root.id || partner.idKind !== "master" || partner.masterMemberId !== null || (partner.endedPeriod !== null && partner.endedPeriod <= snapshot.period);
+    if (invalidPartner) return context.json({ error: "選択したパートナーは2名合算の対象にできません" }, 400);
+  }
+  return context.json({ result: simulateBatchPlacements(snapshot, request) });
 });
 
 app.post("/api/v1/forecasts", async (context) => {

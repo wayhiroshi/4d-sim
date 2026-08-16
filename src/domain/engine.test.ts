@@ -12,6 +12,7 @@ import {
   groupPv,
   periodForDate,
   runForecast,
+  simulateBatchPlacements,
   simulatePlacements
 } from "./engine";
 import type { CourseCode, ForecastScenario, Member, OrganizationSnapshot, PurchaseEvent, SimulationMember, TaxProfile } from "../shared/types";
@@ -430,6 +431,40 @@ describe("simulation checks", () => {
       ...members.slice(1)
     ], data.purchases);
     expect(evaluateTrainerQualificationChecklists(qualified, "root")[1]).toMatchObject({ status: "next", progress: 100 });
+  });
+});
+
+describe("batch placement simulation", () => {
+  const request = {
+    candidateName: "候補",
+    candidateCount: 20,
+    course: "A" as const,
+    idKind: "master" as const,
+    period,
+    targetTitle: "LD" as const,
+    incomeMode: "self" as const,
+    partnerMemberId: null,
+    trainerBonusRole: null,
+    taxProfile: tax
+  };
+
+  it("places 20 people deterministically and does not mutate the source organization", () => {
+    const data = snapshot([member("root", null, "G")], [purchase("root", "root", 10670)]);
+    const original = structuredClone(data);
+    const first = simulateBatchPlacements(data, request);
+    const second = simulateBatchPlacements(data, request);
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({ requestedCount: 20, placedCount: 20, unplacedCount: 0, strategy: "sequential" });
+    expect(first.steps).toHaveLength(20);
+    expect(first.steps.map((step) => step.candidateName)).toEqual(Array.from({ length: 20 }, (_, index) => `候補${index + 1}`));
+    expect(data).toEqual(original);
+  });
+
+  it("stops at the configured five-sub-ID limit and reports the remainder", () => {
+    const data = snapshot([member("root", null, "G")], [purchase("root", "root", 10670)]);
+    const result = simulateBatchPlacements(data, { ...request, candidateCount: 10, idKind: "sub" });
+    expect(result).toMatchObject({ requestedCount: 10, placedCount: 5, unplacedCount: 5, ownedIdCountBefore: 1, ownedIdCountAfter: 6 });
+    expect(result.warnings.some((warning) => warning.includes("5人は配置できませんでした"))).toBe(true);
   });
 });
 
