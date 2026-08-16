@@ -238,7 +238,7 @@ function Organization() {
       <section className="panel tree-panel">
         {snapshot?.members.filter((member) => member.parentMemberId === null).map((root) => <TreeNode key={root.id} member={root} snapshot={snapshot} simulationIds={trialIds} depth={0} selectedId={selected?.id ?? null} onSelect={setSelectedId} />)}
       </section>
-      {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} onRenamed={(displayName) => { setMessage(`表示名を「${displayName}」へ変更しました`); reload(); }} />}
+      {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} rootMemberId={rootMember?.id ?? null} onUpdated={(displayName, idKind) => { setMessage(`「${displayName}」を${idKind === "sub" ? "サブID" : "マスターID"}として保存しました`); reload(); }} />}
     </div>
   </>}</PageState>;
 }
@@ -265,18 +265,19 @@ function TreeNode({ member, snapshot, simulationIds, depth, selectedId, onSelect
   </div>;
 }
 
-function MemberDetail({ member, snapshot, simulation = false, onRenamed }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean; onRenamed: (displayName: string) => void }) {
+function MemberDetail({ member, snapshot, simulation = false, rootMemberId, onUpdated }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean; rootMemberId: string | null; onUpdated: (displayName: string, idKind: IdKind) => void }) {
   const purchases = snapshot.purchases.filter((purchase) => purchase.memberId === member.id).slice(-5).reverse();
-  const [editing, setEditing] = useState(false); const [displayName, setDisplayName] = useState(member.displayName); const [saving, setSaving] = useState(false); const [renameError, setRenameError] = useState<string | null>(null);
-  useEffect(() => { setDisplayName(member.displayName); setEditing(false); setRenameError(null); }, [member.id, member.displayName]);
-  const rename = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); const nextName = displayName.trim(); if (!nextName) return; setSaving(true); setRenameError(null);
-    try { if (simulation) await api.renameSimulationMember(member.id, nextName); else await api.renameMember(member.id, nextName); setEditing(false); onRenamed(nextName); }
-    catch (reason) { setRenameError(reason instanceof Error ? reason.message : "変更できませんでした"); }
+  const [editing, setEditing] = useState(false); const [displayName, setDisplayName] = useState(member.displayName); const [idKind, setIdKind] = useState<IdKind>(member.idKind); const [saving, setSaving] = useState(false); const [editError, setEditError] = useState<string | null>(null);
+  useEffect(() => { setDisplayName(member.displayName); setIdKind(member.idKind); setEditing(false); setEditError(null); }, [member.id, member.displayName, member.idKind]);
+  const saveIdentity = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const nextName = displayName.trim(); if (!nextName) return; setSaving(true); setEditError(null);
+    try { if (simulation) await api.updateSimulationMemberIdentity(member.id, nextName, idKind, snapshot.period); else await api.updateMemberIdentity(member.id, nextName, idKind); setEditing(false); onUpdated(nextName, idKind); }
+    catch (reason) { setEditError(reason instanceof Error ? reason.message : "変更できませんでした"); }
     finally { setSaving(false); }
   };
-  return <aside className={`panel member-detail${simulation ? " simulation-detail" : ""}`}><p className="eyebrow">{simulation ? "TRIAL MEMBER" : "MEMBER DETAIL"}</p><div className="member-name-heading"><h2>{member.displayName}{simulation && <em className="trial-tag">仮</em>}</h2><button className="text-button" onClick={() => setEditing((current) => !current)}>{editing ? "閉じる" : "表示名を編集"}</button></div>
-    {editing && <form className="rename-form" onSubmit={(event) => void rename(event)}><label>アプリ内表示名<input autoFocus value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label><button className="secondary-button" disabled={saving || !displayName.trim()}>{saving ? "保存中…" : "保存"}</button>{renameError && <p className="form-error">{renameError}</p>}</form>}
+  const rootIsFixed = member.id === rootMemberId;
+  return <aside className={`panel member-detail${simulation ? " simulation-detail" : ""}`}><p className="eyebrow">{simulation ? "TRIAL MEMBER" : "MEMBER DETAIL"}</p><div className="member-name-heading"><h2>{member.displayName}{simulation && <em className="trial-tag">仮</em>}</h2><button className="text-button" onClick={() => setEditing((current) => !current)}>{editing ? "閉じる" : "名前・ID種別を編集"}</button></div>
+    {editing && <form className="rename-form identity-form" onSubmit={(event) => void saveIdentity(event)}><label>アプリ内表示名<input autoFocus value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label><label>ID種別<select value={idKind} disabled={rootIsFixed} onChange={(event) => setIdKind(event.target.value as IdKind)}><option value="master">マスターID</option><option value="sub">自分のサブID</option></select>{rootIsFixed && <small className="field-note">本人のルートIDはマスター固定です</small>}</label><button className="secondary-button" disabled={saving || !displayName.trim()}>{saving ? "保存中…" : "変更を保存"}</button>{editError && <p className="form-error">{editError}</p>}<p className="identity-note">サブIDへ変更すると本人のマスターIDに紐づき、報酬試算へ合算されます。公式サイトの登録は変更しません。</p></form>}
     {simulation && <p className="trial-note">試算中だけ存在する仮メンバーです。初回・リピート相当を各1件として計算し、公式登録・実組織には反映されません。</p>}
     <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>タイトル</dt><dd>{member.title}</dd></div><div><dt>ID種別</dt><dd>{member.idKind === "master" ? "マスター" : "サブ"}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div>{simulation && <div><dt>Aさん役</dt><dd>{TRAINER_ROLE_OPTIONS.find((option) => option.value === (member.trainerBonusRole ?? ""))?.label ?? "担当なし"}</dd></div>}</dl>
     <h3>購入履歴</h3>{purchases.length ? purchases.map((purchase) => <div className="history-row" key={purchase.id}><span>{purchase.period} · {purchase.kind}</span><strong>{number.format(purchase.pv)} p.v.</strong></div>) : <p className="muted">履歴はありません</p>}

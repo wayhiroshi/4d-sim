@@ -170,6 +170,21 @@ export async function updateMemberDisplayName(db: D1Database, workspaceId: strin
   return result.meta.changes;
 }
 
+export async function updateMemberIdentity(
+  db: D1Database,
+  workspaceId: string,
+  id: string,
+  displayName: string,
+  idKind: Member["idKind"],
+  masterMemberId: string | null,
+  introducerMemberId: string | null
+): Promise<number> {
+  const result = await db.prepare(
+    "UPDATE members SET display_name = ?, id_kind = ?, master_member_id = ?, introducer_member_id = ?, updated_at = CURRENT_TIMESTAMP WHERE workspace_id = ? AND id = ?"
+  ).bind(displayName, idKind, masterMemberId, introducerMemberId, workspaceId, id).run();
+  return result.meta.changes;
+}
+
 export async function updateMemberTrainerProfile(
   db: D1Database,
   workspaceId: string,
@@ -200,6 +215,21 @@ export async function updateSimulationMemberDisplayName(db: D1Database, workspac
   const result = await db.prepare(
     "UPDATE simulation_members SET display_name = ? WHERE workspace_id = ? AND id = ?"
   ).bind(displayName, workspaceId, id).run();
+  return result.meta.changes;
+}
+
+export async function updateSimulationMemberIdentity(
+  db: D1Database,
+  workspaceId: string,
+  id: string,
+  displayName: string,
+  idKind: SimulationMember["idKind"],
+  masterMemberId: string | null,
+  introducerMemberId: string
+): Promise<number> {
+  const result = await db.prepare(
+    "UPDATE simulation_members SET display_name = ?, id_kind = ?, master_member_id = ?, introducer_member_id = ? WHERE workspace_id = ? AND id = ?"
+  ).bind(displayName, idKind, masterMemberId, introducerMemberId, workspaceId, id).run();
   return result.meta.changes;
 }
 
