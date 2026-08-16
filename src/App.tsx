@@ -9,6 +9,8 @@ import {
   type ForecastResult,
   type ForecastScenario,
   type Goal,
+  type GrowthStoryKind,
+  type GrowthStorySimulationResult,
   type IdKind,
   type Member,
   type OrganizationSnapshot,
@@ -292,6 +294,7 @@ function Products() {
 }
 
 type RewardFocus = "registration" | "line";
+type SimulatorPattern = "optimized" | GrowthStoryKind;
 
 const lineDeltaFor = (comparison: PlacementResult["incomeComparison"]): number =>
   comparison.self.delta.line + (comparison.partner?.delta.line ?? 0);
@@ -302,6 +305,8 @@ function Simulator() {
   const goal = useLoad(api.goal, []);
   const [results, setResults] = useState<PlacementResult[]>([]);
   const [batchResult, setBatchResult] = useState<BatchSimulationResult | null>(null);
+  const [storyResult, setStoryResult] = useState<GrowthStorySimulationResult | null>(null);
+  const [pattern, setPattern] = useState<SimulatorPattern>("optimized");
   const [candidateCount, setCandidateCount] = useState(1);
   const [rewardFocus, setRewardFocus] = useState<RewardFocus>("registration");
   const [busy, setBusy] = useState(false);
@@ -311,13 +316,16 @@ function Simulator() {
   const [message, setMessage] = useState<string | null>(null);
   const [incomeMode, setIncomeMode] = useState<"self" | "pair">("self");
   const [partnerMemberId, setPartnerMemberId] = useState("");
+  const [startingMemberId, setStartingMemberId] = useState("");
   const [candidate, setCandidate] = useState<{ name: string; course: CourseCode; idKind: IdKind; trainerBonusRole: TrainerBonusRole | null } | null>(null);
   const snapshot = tree.data?.snapshot ?? null;
   const rootMember = snapshot?.members.find((member) => member.parentMemberId === null) ?? null;
   const partnerOptions = snapshot?.members.filter((member) => member.id !== rootMember?.id && member.idKind === "master" && member.masterMemberId === null && (member.endedPeriod === null || member.endedPeriod > snapshot.period) && !member.id.startsWith("trial-")) ?? [];
   const selectedPartnerId = partnerMemberId || partnerOptions[0]?.id || "";
-  const hasResults = batchResult !== null || results.length > 0;
-  const clearResults = () => { setResults([]); setBatchResult(null); };
+  const storyStartingOptions = snapshot?.members.filter((member) => member.endedPeriod === null || member.endedPeriod > snapshot.period) ?? [];
+  const selectedStartingMemberId = startingMemberId || rootMember?.id || "";
+  const hasResults = storyResult !== null || batchResult !== null || results.length > 0;
+  const clearResults = () => { setResults([]); setBatchResult(null); setStoryResult(null); };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -326,11 +334,12 @@ function Simulator() {
     setBusy(true); setError(null); setMessage(null);
     const values = new FormData(event.currentTarget);
     const enteredName = String(values.get("name") ?? "").trim();
+    const trainerRole = values.get("trainerRole");
     const nextCandidate = {
       name: enteredName || "試算",
       course: String(values.get("course")) as CourseCode,
-      idKind: String(values.get("idKind")) as IdKind,
-      trainerBonusRole: String(values.get("trainerRole")) as TrainerBonusRole || null
+      idKind: pattern === "optimized" ? String(values.get("idKind")) as IdKind : "master" as const,
+      trainerBonusRole: typeof trainerRole === "string" && trainerRole ? trainerRole as TrainerBonusRole : null
     };
     const request = {
       candidateName: nextCandidate.name,
@@ -345,12 +354,19 @@ function Simulator() {
     };
     try {
       setCandidate(nextCandidate);
-      if (candidateCount === 1) {
+      if (pattern !== "optimized") {
+        const response = await api.simulateGrowthStory({
+          ...request,
+          story: pattern,
+          startingMemberId: selectedStartingMemberId
+        });
+        setStoryResult(response.result); setBatchResult(null); setResults([]);
+      } else if (candidateCount === 1) {
         const response = await api.simulate(request);
-        setResults(response.results); setBatchResult(null);
+        setResults(response.results); setBatchResult(null); setStoryResult(null);
       } else {
         const response = await api.simulateBatch({ ...request, candidateCount });
-        setBatchResult(response.result); setResults([]);
+        setBatchResult(response.result); setResults([]); setStoryResult(null);
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : "計算できませんでした"); }
     finally { setBusy(false); }
@@ -383,17 +399,21 @@ function Simulator() {
     <section className="trial-banner"><div><strong>現在の試算組織：{tree.data?.simulationMembers.length ?? 0}人</strong><small>保存済みの仮メンバーを含めて再計算します。</small></div><NavLink to="/organization" className="text-button">組織を確認</NavLink></section>
 
     <form className="panel simulator-workflow" onSubmit={(event) => void submit(event)}>
-      <header className="simulator-workflow-heading"><div><span>1</span><div><strong>試算する人数と名前</strong><small>名前は空欄でも計算できます</small></div></div></header>
+      <header className="simulator-workflow-heading"><div><span>1</span><div><strong>試算のストーリー</strong><small>増え方の違いを同じ報酬ルールで比較します</small></div></div></header>
+      <section className="simulator-patterns" role="group" aria-label="試算パターン">
+        <button type="button" className={pattern === "optimized" ? "active" : ""} aria-pressed={pattern === "optimized"} onClick={() => { setPattern("optimized"); setRewardFocus("registration"); clearResults(); }}><strong>効率配置</strong><small>1〜20人を1人ずつ最適化</small><b>人数を自由に選ぶ</b></button>
+        <button type="button" className={pattern === "three-by-three" ? "active" : ""} aria-pressed={pattern === "three-by-three"} onClick={() => { setPattern("three-by-three"); setRewardFocus("line"); clearResults(); }}><strong>理想型 3→3</strong><small>3人がそれぞれ3人を紹介</small><b>8段・累計9,840人</b></button>
+        <button type="button" className={pattern === "one-by-one" ? "active" : ""} aria-pressed={pattern === "one-by-one"} onClick={() => { setPattern("one-by-one"); setRewardFocus("line"); clearResults(); }}><strong>現実型 1→1</strong><small>1人から次の1人へつなぐ</small><b>8段・累計8人</b></button>
+      </section>
       <section className="simulator-step-grid simulator-basics">
-        <div className="count-field"><span className="field-label">人数</span><div className="count-presets" role="group" aria-label="試算人数">{[1, 5, 10, 20].map((count) => <button type="button" className={candidateCount === count ? "active" : ""} aria-pressed={candidateCount === count} key={count} onClick={() => { setCandidateCount(count); clearResults(); }}>{count}人</button>)}</div><label className="custom-count">その他<input type="number" min="1" max="20" value={candidateCount} onChange={(event) => { setCandidateCount(Math.max(1, Math.min(20, Number(event.target.value) || 1))); clearResults(); }} /></label></div>
-        <label>{candidateCount === 1 ? "試算上の名前（任意）" : "名前の先頭（任意）"}<input name="name" maxLength={80} placeholder={candidateCount === 1 ? "空欄なら「試算」" : "空欄なら「試算1」〜"} /><small className="field-note">{candidateCount === 1 ? "空欄時は「試算」とします" : `空欄時は「試算1」〜「試算${candidateCount}」とします`}</small></label>
+        {pattern === "optimized" ? <><div className="count-field"><span className="field-label">人数</span><div className="count-presets" role="group" aria-label="試算人数">{[1, 5, 10, 20].map((count) => <button type="button" className={candidateCount === count ? "active" : ""} aria-pressed={candidateCount === count} key={count} onClick={() => { setCandidateCount(count); clearResults(); }}>{count}人</button>)}</div><label className="custom-count">その他<input type="number" min="1" max="20" value={candidateCount} onChange={(event) => { setCandidateCount(Math.max(1, Math.min(20, Number(event.target.value) || 1))); clearResults(); }} /></label></div><label>{candidateCount === 1 ? "試算上の名前（任意）" : "名前の先頭（任意）"}<input name="name" maxLength={80} placeholder={candidateCount === 1 ? "空欄なら「試算」" : "空欄なら「試算1」〜"} /><small className="field-note">{candidateCount === 1 ? "空欄時は「試算」とします" : "空欄時は「試算1」から連番にします"}</small></label></> : <label className="span-2">ストーリーの起点<select value={selectedStartingMemberId} onChange={(event) => { setStartingMemberId(event.target.value); clearResults(); }}>{storyStartingOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}（{member.course}）</option>)}</select><small className="field-note">この人から紹介の連鎖を始めます</small></label>}
       </section>
 
       <header className="simulator-workflow-heading"><div><span>2</span><div><strong>登録条件</strong><small>全員を同じ条件で計算します</small></div></div></header>
       <section className="simulator-step-grid simulator-conditions">
         <label>希望コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label>
-        <label>IDの扱い<select name="idKind" defaultValue="master"><option value="master">通常の新規会員</option><option value="sub">自分のサブID</option></select><small className="field-note">サブIDの報酬は本人へ合算</small></label>
-        <label>Aさん役<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!trainerRoleAvailable(rootMember?.trainerCredential ?? "NONE", option.value)}>{option.label}</option>)}</select><small className="field-note">現在資格：{rootMember?.trainerCredential === "NONE" ? "未取得" : rootMember?.trainerCredential}</small></label>
+        {pattern === "optimized" ? <label>IDの扱い<select name="idKind" defaultValue="master"><option value="master">通常の新規会員</option><option value="sub">自分のサブID</option></select><small className="field-note">サブIDの報酬は本人へ合算</small></label> : <div className="story-condition"><span>IDの扱い</span><strong>通常の新規会員</strong><small>紹介の連鎖のため、サブIDは使いません</small></div>}
+        {pattern === "optimized" ? <label>Aさん役<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!trainerRoleAvailable(rootMember?.trainerCredential ?? "NONE", option.value)}>{option.label}</option>)}</select><small className="field-note">現在資格：{rootMember?.trainerCredential === "NONE" ? "未取得" : rootMember?.trainerCredential}</small></label> : <div className="story-condition"><span>一時ボーナス</span><strong>含めない</strong><small>8段到達時の継続報酬を試算します</small></div>}
       </section>
 
       <header className="simulator-workflow-heading"><div><span>3</span><div><strong>収入の集計範囲</strong><small>自分だけ、または2名合算を選びます</small></div></div></header>
@@ -402,12 +422,14 @@ function Simulator() {
         {incomeMode === "pair" && <label>合算するパートナー<select value={selectedPartnerId} disabled={!partnerOptions.length} onChange={(event) => { setPartnerMemberId(event.target.value); clearResults(); }}>{partnerOptions.length ? partnerOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}（{member.course}）</option>) : <option value="">対象メンバーがいません</option>}</select><small className="field-note">各人の報酬を個別計算して合算</small></label>}
       </section>
 
-      <footer className="simulator-submit"><div><strong>{candidateCount === 1 ? "1人の配置候補を比較" : `${candidateCount}人を順番に効率配置`}</strong><small>計算しただけでは試算組織へ保存されません</small></div><button className="primary-button" disabled={busy || (incomeMode === "pair" && !selectedPartnerId)}>{busy ? "全配置を計算中…" : "配置を計算する"}</button></footer>
+      <footer className="simulator-submit"><div><strong>{pattern === "three-by-three" ? "3人ずつ増える未来を8段まで試算" : pattern === "one-by-one" ? "1人ずつつながる未来を8段まで試算" : candidateCount === 1 ? "1人の配置候補を比較" : `${candidateCount}人を順番に効率配置`}</strong><small>{pattern === "optimized" ? "計算しただけでは試算組織へ保存されません" : "遠い未来の条件付き試算として表示し、組織へは保存しません"}</small></div><button className="primary-button" disabled={busy || (incomeMode === "pair" && !selectedPartnerId) || (pattern !== "optimized" && !selectedStartingMemberId)}>{busy ? "全配置を計算中…" : pattern === "optimized" ? "配置を計算する" : "8段の未来を計算する"}</button></footer>
     </form>
 
     {error && <div className="state-card error">{error}</div>}
     {message && <p className="status-message">{message}。続けて次の人を試算できます。</p>}
-    {hasResults && <section className="result-viewbar"><div><strong>結果に表示する報酬</strong><small>{rewardFocus === "registration" ? "一時ボーナスを含む登録月の差額" : "一時ボーナスを除き、ラインボーナスだけを比較"}</small></div><div className="reward-focus-switch" role="group" aria-label="報酬表示"><button type="button" className={rewardFocus === "registration" ? "active" : ""} aria-pressed={rewardFocus === "registration"} onClick={() => setRewardFocus("registration")}>登録月の総額</button><button type="button" className={rewardFocus === "line" ? "active" : ""} aria-pressed={rewardFocus === "line"} onClick={() => setRewardFocus("line")}>ラインのみ</button></div></section>}
+    {hasResults && <section className="result-viewbar"><div><strong>結果に表示する報酬</strong><small>{storyResult ? rewardFocus === "registration" ? "8段到達時の継続ボーナス全体" : "8段到達時のラインボーナスだけを比較" : rewardFocus === "registration" ? "一時ボーナスを含む登録月の差額" : "一時ボーナスを除き、ラインボーナスだけを比較"}</small></div><div className="reward-focus-switch" role="group" aria-label="報酬表示"><button type="button" className={rewardFocus === "registration" ? "active" : ""} aria-pressed={rewardFocus === "registration"} onClick={() => setRewardFocus("registration")}>{storyResult ? "継続報酬全体" : "登録月の総額"}</button><button type="button" className={rewardFocus === "line" ? "active" : ""} aria-pressed={rewardFocus === "line"} onClick={() => setRewardFocus("line")}>ラインのみ</button></div></section>}
+
+    {storyResult && <div className="batch-results"><article className="placement-card batch-placement-card story-result-card"><div className="placement-heading"><div><small>8段の紹介ストーリー</small><h2>{storyResult.storyLabel}</h2></div><RewardAmount comparison={storyResult.incomeComparison} focus={rewardFocus} longTerm /></div><div className="story-shape" aria-label="8段の組織形状">{storyResult.generationCounts.map((count, index) => <div key={`${index}-${count}`}><small>{index + 1}段</small><strong>{number.format(count)}人</strong>{index < storyResult.generationCounts.length - 1 && <span>→</span>}</div>)}</div><div className="result-stats"><span>累計 {number.format(storyResult.placedCount)}人</span><span>タイトル {storyResult.titleBefore} → {storyResult.titleAfter}</span><span>未達 {storyResult.missingBefore} → {storyResult.missingAfter}</span></div><FocusedIncomeBreakdown comparison={storyResult.incomeComparison} focus={rewardFocus} /><BonusDeltaDetails delta={storyResult.bonusDelta} /><details className="story-generations" open><summary>8段の人数とp.v.を見る</summary><div className="story-generation-list">{storyResult.generations.map((generation) => <div key={generation.generation}><strong>{generation.generation}段目</strong><span>この段 {number.format(generation.memberCount)}人<small>{number.format(generation.pv)} p.v.</small></span><span>累計 {number.format(generation.cumulativeMemberCount)}人<small>{number.format(generation.cumulativePv)} p.v.</small></span></div>)}</div></details><p className="story-reference-note"><strong>遠い未来の参考試算</strong><span>このストーリーは試算組織へ保存しません。</span></p><p className="warning">{storyResult.warnings.join(" / ")}</p></article></div>}
 
     {batchResult && <div className="batch-results"><article className="placement-card batch-placement-card"><div className="placement-heading"><div><small>逐次最適配置の結果</small><h2>{batchResult.placedCount} / {batchResult.requestedCount}人を配置</h2></div><RewardAmount comparison={batchResult.incomeComparison} focus={rewardFocus} /></div><div className="result-stats"><span>タイトル {batchResult.titleBefore} → {batchResult.titleAfter}</span><span>未達 {batchResult.missingBefore} → {batchResult.missingAfter}</span>{batchResult.ownedIdCountAfter !== batchResult.ownedIdCountBefore && <span>本人保有 {batchResult.ownedIdCountBefore} → {batchResult.ownedIdCountAfter}ID</span>}</div><FocusedIncomeBreakdown comparison={batchResult.incomeComparison} focus={rewardFocus} /><BonusDeltaDetails delta={batchResult.bonusDelta} /><details className="batch-steps" open><summary>配置手順を見る（{batchResult.placedCount}人）</summary><ol>{batchResult.steps.map((step) => { const stepDelta = rewardFocus === "line" ? step.lineDelta : step.grossDelta; return <li key={step.candidateMemberId}><div><strong>{step.candidateName}</strong><span>→ {step.placementMemberName} 配下</span></div><small>タイトル {step.titleBefore} → {step.titleAfter} ・ 未達 {step.missingBefore} → {step.missingAfter} ・ {stepDelta >= 0 ? "+" : ""}{yen.format(stepDelta)}</small></li>; })}</ol></details><div className="result-action"><div><strong>この案を残す</strong><small>押したときだけ仮メンバーとして保存します</small></div><button className="secondary-button placement-save" disabled={savingBatch || batchResult.placedCount === 0} onClick={() => void addBatchPlacement()}>{savingBatch ? "試算組織へ一括追加中…" : `${batchResult.placedCount}人を試算組織へ追加`}</button></div><p className="warning">{batchResult.warnings.join(" / ")}</p></article></div>}
 
@@ -415,9 +437,9 @@ function Simulator() {
   </>}</PageState>;
 }
 
-function RewardAmount({ comparison, focus }: { comparison: PlacementResult["incomeComparison"]; focus: RewardFocus }) {
+function RewardAmount({ comparison, focus, longTerm = false }: { comparison: PlacementResult["incomeComparison"]; focus: RewardFocus; longTerm?: boolean }) {
   const delta = focus === "line" ? lineDeltaFor(comparison) : comparison.combined.grossDelta;
-  const label = focus === "line" ? (comparison.mode === "pair" ? "2名合計・ライン差" : "継続ライン差") : (comparison.mode === "pair" ? "2名合計・登録月差" : "登録月の総額差");
+  const label = focus === "line" ? (comparison.mode === "pair" ? "2名合計・ライン差" : "継続ライン差") : longTerm ? (comparison.mode === "pair" ? "2名合計・継続報酬差" : "継続報酬の差") : (comparison.mode === "pair" ? "2名合計・登録月差" : "登録月の総額差");
   return <div className="placement-amount"><small>{label}</small><strong className={delta >= 0 ? "positive" : "negative"}>{delta >= 0 ? "+" : ""}{yen.format(delta)}</strong></div>;
 }
 

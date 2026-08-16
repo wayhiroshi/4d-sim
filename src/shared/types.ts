@@ -314,6 +314,13 @@ export interface BatchSimulationRequest extends SimulationRequest {
   candidateCount: number;
 }
 
+export type GrowthStoryKind = "three-by-three" | "one-by-one";
+
+export interface GrowthStorySimulationRequest extends SimulationRequest {
+  story: GrowthStoryKind;
+  startingMemberId: string;
+}
+
 export interface PlacementBonusDelta {
   start: number;
   trainer: number;
@@ -400,10 +407,38 @@ export interface BatchSimulationResult {
   warnings: string[];
 }
 
+export interface GrowthStoryGeneration {
+  generation: number;
+  memberCount: number;
+  cumulativeMemberCount: number;
+  pv: number;
+  cumulativePv: number;
+}
+
+export interface GrowthStorySimulationResult {
+  strategy: GrowthStoryKind;
+  storyLabel: string;
+  requestedCount: number;
+  placedCount: number;
+  unplacedCount: number;
+  generationCounts: number[];
+  generations: GrowthStoryGeneration[];
+  titleBefore: TitleCode;
+  titleAfter: TitleCode;
+  missingBefore: number;
+  missingAfter: number;
+  ownedIdCountBefore: number;
+  ownedIdCountAfter: number;
+  bonusDelta: PlacementBonusDelta;
+  incomeComparison: PlacementIncomeComparison;
+  warnings: string[];
+}
+
 export interface BatchSimulationMemberInput {
   tempId: string;
   displayName: string;
   parentMemberId: string;
+  introducerMemberId?: string;
   course: CourseCode;
   period: string;
   idKind: IdKind;
