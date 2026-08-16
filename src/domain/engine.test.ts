@@ -129,6 +129,16 @@ describe("trainer bonus", () => {
 });
 
 describe("pv and title rules", () => {
+  it("adds each owned sub ID bonus to the master ID income and applies deductions once", () => {
+    const sub = { ...member("sub", "root"), idKind: "sub" as const, masterMemberId: "root" };
+    const data = snapshot(
+      [member("root", null, "G"), sub, member("customer", "sub")],
+      [purchase("root", "root", 10670), purchase("sub", "sub", 5330), purchase("customer", "customer", 5330)]
+    );
+    expect(computeBonus(data, "sub", tax).line).toBe(800);
+    expect(computeBonus(data, "root", tax)).toMatchObject({ line: 1867, gross: 1867 });
+  });
+
   it("excludes the member repeat and includes their additional purchase in group pv", () => {
     const data = snapshot(
       [member("root", null), member("child", "root")],
@@ -263,7 +273,7 @@ describe("placement simulation", () => {
   it("separates one-time and recurring deltas and includes the selected trainer role", () => {
     const data = snapshot([member("root", null, "G")], [purchase("root", "root", 10670)]);
     const result = simulatePlacements(data, {
-      candidateName: "候補", course: "A", trainerBonusRole: "PT", period, targetTitle: "LD",
+      candidateName: "候補", course: "A", idKind: "master", trainerBonusRole: "PT", period, targetTitle: "LD",
       placementCandidateIds: ["root"], taxProfile: tax
     })[0];
     expect(result?.bonusDelta).toMatchObject({
@@ -276,7 +286,7 @@ describe("placement simulation", () => {
     for (let index = 0; index < 7; index += 1) members.push(member(`m${index}`, "root"));
     const data = snapshot(members, members.map((item) => purchase(`p-${item.id}`, item.id, item.course === "G" ? 10670 : 5330)));
     const original = structuredClone(data);
-    const request = { candidateName: "候補", course: "A" as const, period, targetTitle: "LD" as const, placementCandidateIds: ["root"], taxProfile: tax };
+    const request = { candidateName: "候補", course: "A" as const, idKind: "master" as const, period, targetTitle: "LD" as const, placementCandidateIds: ["root"], taxProfile: tax };
     const first = simulatePlacements(data, request);
     expect(first).toEqual(simulatePlacements(data, request));
     expect(first[0]).toMatchObject({ eligible: false, rank: null });
@@ -287,9 +297,9 @@ describe("placement simulation", () => {
     const actual = snapshot([member("root", null, "G")], [purchase("p-root", "root", 10670)]);
     const original = structuredClone(actual);
     const trials: SimulationMember[] = [
-      { id: "trial-1", workspaceId: "test", displayName: "仮1", parentMemberId: "root", introducerMemberId: "root", trainerMemberId: "root", trainerBonusRole: "PT", course: "A", period, createdAt: "2026-07-22T00:00:01Z" },
-      { id: "trial-2", workspaceId: "test", displayName: "仮2", parentMemberId: "root", introducerMemberId: "root", trainerMemberId: null, trainerBonusRole: null, course: "A", period, createdAt: "2026-07-22T00:00:02Z" },
-      { id: "trial-3", workspaceId: "test", displayName: "仮3", parentMemberId: "trial-1", introducerMemberId: "root", trainerMemberId: null, trainerBonusRole: null, course: "G", period, createdAt: "2026-07-22T00:00:03Z" }
+      { id: "trial-1", workspaceId: "test", displayName: "仮1", parentMemberId: "root", introducerMemberId: "root", masterMemberId: null, trainerMemberId: "root", trainerBonusRole: "PT", idKind: "master", course: "A", period, createdAt: "2026-07-22T00:00:01Z" },
+      { id: "trial-2", workspaceId: "test", displayName: "仮2", parentMemberId: "root", introducerMemberId: "root", masterMemberId: null, trainerMemberId: null, trainerBonusRole: null, idKind: "master", course: "A", period, createdAt: "2026-07-22T00:00:02Z" },
+      { id: "trial-3", workspaceId: "test", displayName: "仮3", parentMemberId: "trial-1", introducerMemberId: "root", masterMemberId: null, trainerMemberId: null, trainerBonusRole: null, idKind: "master", course: "G", period, createdAt: "2026-07-22T00:00:03Z" }
     ];
     const layered = applySimulationMembers(actual, trials);
     expect(layered.members.map((item) => item.id)).toEqual(["root", "trial-1", "trial-2", "trial-3"]);
@@ -300,8 +310,29 @@ describe("placement simulation", () => {
     expect(cumulativeDelta.oneTime).toBe(cumulativeDelta.start + cumulativeDelta.trainer);
     expect(cumulativeDelta.recurring).toBe(cumulativeDelta.line + cumulativeDelta.director + cumulativeDelta.title);
     expect(cumulativeDelta.gross).toBe(cumulativeDelta.oneTime + cumulativeDelta.recurring);
-    expect(simulatePlacements(layered, { candidateName: "仮4", course: "A", period, targetTitle: "LD", taxProfile: tax }).some((item) => item.placementMemberId === "trial-1")).toBe(true);
+    expect(simulatePlacements(layered, { candidateName: "仮4", course: "A", idKind: "master", period, targetTitle: "LD", taxProfile: tax }).some((item) => item.placementMemberId === "trial-1")).toBe(true);
     expect(actual).toEqual(original);
+  });
+
+  it("combines a trial sub ID's downstream bonus and rejects a sixth sub ID", () => {
+    const actual = snapshot([member("root", null, "G")], [purchase("p-root", "root", 10670)]);
+    const trials: SimulationMember[] = [
+      { id: "trial-sub", workspaceId: "test", displayName: "仮サブ", parentMemberId: "root", introducerMemberId: "root", masterMemberId: "root", trainerMemberId: null, trainerBonusRole: null, idKind: "sub", course: "A", period, createdAt: "2026-07-22T00:00:01Z" },
+      { id: "trial-child", workspaceId: "test", displayName: "仮配下", parentMemberId: "trial-sub", introducerMemberId: "root", masterMemberId: null, trainerMemberId: null, trainerBonusRole: null, idKind: "master", course: "A", period, createdAt: "2026-07-22T00:00:02Z" }
+    ];
+    const layered = applySimulationMembers(actual, trials);
+    expect(computeBonus(layered, "root", tax).line).toBe(1867);
+
+    const fiveSubs = snapshot([
+      member("root", null, "G"),
+      ...Array.from({ length: 5 }, (_, index) => ({ ...member(`sub-${index}`, "root"), idKind: "sub" as const, masterMemberId: "root" }))
+    ], [purchase("p-root", "root", 10670)]);
+    const result = simulatePlacements(fiveSubs, {
+      candidateName: "6件目", course: "A", idKind: "sub", period, targetTitle: "LD",
+      placementCandidateIds: ["root"], taxProfile: tax
+    })[0];
+    expect(result).toMatchObject({ eligible: false, ownedIdCountBefore: 6, ownedIdCountAfter: 6 });
+    expect(result?.warnings.join(" ")).toContain("上限5件");
   });
 });
 

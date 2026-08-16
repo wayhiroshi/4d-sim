@@ -1,10 +1,11 @@
 {
   "planId": "fordays-jp",
-  "version": "2026-03+2026-06-shopping-mall",
+  "version": "2026-03+2026-06-shopping-mall+sub-id",
   "effectiveFrom": "2026-03-18",
   "effectiveTo": null,
   "businessMonthStartDay": 18,
   "firstLineLimit": 7,
+  "maxSubIdsPerMaster": 5,
   "compression": { "enabled": true, "promoteEndedMembers": true, "firstLineMayExceedLimit": true },
   "courses": {
     "A": { "code": "A", "recurringPv": 5330, "startBonus": 3740, "maxBaseDepth": 5, "baseLineRates": [0.15, 0.05, 0.05, 0.05, 0.05] },
@@ -101,6 +102,7 @@
     { "name": "製品ガイド", "revision": "RA202605", "pages": "1-12" },
     { "name": "ポジションとタイトル等の取得条件", "revision": "2025-09-30", "pages": "1" },
     { "name": "新しいDR資格取得条件", "revision": "2025-07-18/08-20修正", "pages": "1" },
+    { "name": "契約書面", "revision": "2025-09-18改版", "pages": "6-7（サブID・ボーナス合算）" },
     { "name": "公式 フォーデイズショッピングモール招待コード利用 Q&A", "revision": "2026-06-18", "pages": "1-2" },
     { "name": "Fordays Invitation Code Guide", "revision": "2026-06", "pages": "2" },
     { "name": "フォーデイズ公式 ナチュラル DNコラーゲン製品ページ", "revision": "2026-07-27確認", "pages": "Web" }

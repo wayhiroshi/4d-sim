@@ -45,8 +45,10 @@ interface SimulationMemberRow {
   display_name: string;
   parent_member_id: string;
   introducer_member_id: string;
+  master_member_id: string | null;
   trainer_member_id: string | null;
   trainer_bonus_role: SimulationMember["trainerBonusRole"];
+  id_kind: SimulationMember["idKind"];
   course: SimulationMember["course"];
   period: string;
   created_at: string;
@@ -101,8 +103,10 @@ const mapSimulationMember = (row: SimulationMemberRow): SimulationMember => ({
   displayName: row.display_name,
   parentMemberId: row.parent_member_id,
   introducerMemberId: row.introducer_member_id,
+  masterMemberId: row.master_member_id,
   trainerMemberId: row.trainer_member_id,
   trainerBonusRole: row.trainer_bonus_role,
+  idKind: row.id_kind,
   course: row.course,
   period: row.period,
   createdAt: row.created_at
@@ -164,10 +168,11 @@ export async function updateSimulationMemberDisplayName(db: D1Database, workspac
 }
 
 export const simulationMemberInsert = (db: D1Database, member: SimulationMember): D1PreparedStatement => db.prepare(
-  "INSERT INTO simulation_members (id, workspace_id, display_name, parent_member_id, introducer_member_id, trainer_member_id, trainer_bonus_role, course, period, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  "INSERT INTO simulation_members (id, workspace_id, display_name, parent_member_id, introducer_member_id, master_member_id, trainer_member_id, trainer_bonus_role, id_kind, course, period, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 ).bind(
   member.id, member.workspaceId, member.displayName, member.parentMemberId, member.introducerMemberId,
-  member.trainerMemberId, member.trainerBonusRole, member.course, member.period, member.createdAt
+  member.masterMemberId, member.trainerMemberId, member.trainerBonusRole, member.idKind,
+  member.course, member.period, member.createdAt
 );
 
 export async function loadSnapshot(db: D1Database, workspaceId: string, period: string): Promise<OrganizationSnapshot> {

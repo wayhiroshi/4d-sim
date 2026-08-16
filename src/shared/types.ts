@@ -60,6 +60,7 @@ export interface PlanConfig {
   effectiveTo: string | null;
   businessMonthStartDay: number;
   firstLineLimit: number;
+  maxSubIdsPerMaster: number;
   compression: { enabled: boolean; promoteEndedMembers: boolean; firstLineMayExceedLimit: boolean };
   courses: Record<CourseCode, CourseRule>;
   trainerBonuses: Record<CourseCode, Record<TrainerBonusRole, number>>;
@@ -171,8 +172,10 @@ export interface SimulationMember {
   displayName: string;
   parentMemberId: string;
   introducerMemberId: string;
+  masterMemberId: string | null;
   trainerMemberId: string | null;
   trainerBonusRole: TrainerBonusRole | null;
+  idKind: IdKind;
   course: CourseCode;
   period: string;
   createdAt: string;
@@ -185,6 +188,8 @@ export interface SimulationOrganization {
     actual: BonusBreakdown;
     simulated: BonusBreakdown;
     delta: PlacementBonusDelta;
+    actualOwnedIdCount: number;
+    simulatedOwnedIdCount: number;
   };
 }
 
@@ -254,6 +259,7 @@ export interface Mission {
 export interface SimulationRequest {
   candidateName: string;
   course: CourseCode;
+  idKind: IdKind;
   period: string;
   targetTitle: TitleCode;
   placementCandidateIds?: string[];
@@ -286,6 +292,8 @@ export interface PlacementResult {
   missingBefore: number;
   missingAfter: number;
   earliestAchievementPeriod: string | null;
+  ownedIdCountBefore: number;
+  ownedIdCountAfter: number;
   reasons: string[];
   warnings: string[];
 }
@@ -318,6 +326,7 @@ export interface ForecastResult {
     title: TitleCode;
     gross: number;
     estimatedNet: number;
+    ownedIdCount: number;
     directRegistrations: number;
     teamRegistrations: number;
     retainedMembers: number;
@@ -343,5 +352,6 @@ export interface DashboardData {
   groupMembers: number;
   title: TitleEvaluation;
   bonus: BonusBreakdown;
+  ownedIdCount: number;
   missions: Mission[];
 }

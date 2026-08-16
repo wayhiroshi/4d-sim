@@ -94,6 +94,20 @@ export function descendants(snapshot: OrganizationSnapshot, rootId: string): Arr
   return output;
 }
 
+export function ownedIds(snapshot: OrganizationSnapshot, masterId: string): Member[] {
+  const master = snapshot.members.find((member) => member.id === masterId);
+  if (!master) return [];
+  if (master.idKind === "sub") return [master];
+  return [
+    master,
+    ...snapshot.members.filter((member) =>
+      member.idKind === "sub" &&
+      member.masterMemberId === masterId &&
+      (member.endedPeriod === null || member.endedPeriod > snapshot.period)
+    )
+  ];
+}
+
 export function groupPv(snapshot: OrganizationSnapshot, rootId: string, period = snapshot.period): number {
   const descendantIds = new Set(descendants(snapshot, rootId).map(({ member }) => member.id));
   return snapshot.purchases
@@ -439,16 +453,11 @@ function invoiceTransitionDeduction(gross: number, period: string, invoiceRegist
   return money((gross / 11) * transition.disallowedInputTaxRate);
 }
 
-export function computeBonus(
-  snapshot: OrganizationSnapshot,
-  rootId: string,
-  taxProfile: TaxProfile
-): BonusBreakdown {
+type RawBonus = Pick<BonusBreakdown, "start" | "trainer" | "line" | "director" | "title" | "gross">;
+
+function computeRawBonus(snapshot: OrganizationSnapshot, rootId: string): RawBonus {
   if (!isActive(snapshot, rootId)) {
-    return {
-      start: 0, trainer: 0, line: 0, director: 0, title: 0, gross: 0,
-      estimatedNet: taxProfile.priorCarryover, deductions: { invoiceTransition: 0, withholding: 0, transferFee: 0, offsets: taxProfile.offsets }, carryover: taxProfile.priorCarryover
-    };
+    return { start: 0, trainer: 0, line: 0, director: 0, title: 0, gross: 0 };
   }
   const evaluatedTitle = evaluateTitle(snapshot, rootId).achievedTitle;
   const start = computeStartBonus(snapshot, rootId);
@@ -459,6 +468,26 @@ export function computeBonus(
   const director = computeDirectorBonus(snapshot, rootId, evaluatedTitle);
   const title = computeTitleBonus(snapshot, rootId, evaluatedTitle);
   const gross = money(start + trainer + line + director + title);
+  return { start, trainer, line, director, title, gross };
+}
+
+export function computeBonus(
+  snapshot: OrganizationSnapshot,
+  rootId: string,
+  taxProfile: TaxProfile
+): BonusBreakdown {
+  const raw = ownedIds(snapshot, rootId).reduce<RawBonus>((total, member) => {
+    const bonus = computeRawBonus(snapshot, member.id);
+    return {
+      start: total.start + bonus.start,
+      trainer: total.trainer + bonus.trainer,
+      line: total.line + bonus.line,
+      director: total.director + bonus.director,
+      title: total.title + bonus.title,
+      gross: total.gross + bonus.gross
+    };
+  }, { start: 0, trainer: 0, line: 0, director: 0, title: 0, gross: 0 });
+  const { start, trainer, line, director, title, gross } = raw;
   const invoiceTransition = invoiceTransitionDeduction(gross, snapshot.period, taxProfile.invoiceRegistered);
   const withholding = money(Math.max(0, gross - taxProfile.offsets - invoiceTransition) * taxProfile.withholdingRate);
   const payable = gross + taxProfile.priorCarryover - taxProfile.offsets - invoiceTransition - withholding;
@@ -509,10 +538,10 @@ function cloneWithCandidate(
     displayName: request.candidateName,
     parentMemberId: placementMemberId,
     introducerMemberId: snapshot.members.find((member) => member.parentMemberId === null)?.id ?? placementMemberId,
-    masterMemberId: null,
+    masterMemberId: request.idKind === "sub" ? snapshot.members.find((member) => member.parentMemberId === null)?.id ?? null : null,
     trainerMemberId: request.trainerBonusRole ? snapshot.members.find((member) => member.parentMemberId === null)?.id ?? null : null,
     trainerBonusRole: request.trainerBonusRole ?? null,
-    idKind: "master",
+    idKind: request.idKind,
     course: request.course,
     title: "NONE",
     trainerCredential: "NONE",
@@ -558,10 +587,10 @@ export function applySimulationMembers(
       displayName: item.displayName,
       parentMemberId: item.parentMemberId,
       introducerMemberId: item.introducerMemberId,
-      masterMemberId: null,
+      masterMemberId: item.masterMemberId,
       trainerMemberId: item.trainerMemberId,
       trainerBonusRole: item.trainerBonusRole,
-      idKind: "master",
+      idKind: item.idKind,
       course: item.course,
       title: "NONE",
       trainerCredential: "NONE",
@@ -593,19 +622,25 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
   if (!root) throw new Error("Root member is required");
   const beforeTitle = evaluateTitle(snapshot, root.id);
   const beforeBonus = computeBonus(snapshot, root.id, request.taxProfile);
+  const ownedIdCountBefore = ownedIds(snapshot, root.id).length;
+  const subIdLimitReached = request.idKind === "sub" && ownedIdCountBefore - 1 >= planConfig.maxSubIdsPerMaster;
   const candidates = request.placementCandidateIds?.length
     ? snapshot.members.filter((member) => request.placementCandidateIds?.includes(member.id))
     : snapshot.members.filter((member) => member.endedPeriod === null);
   const results = candidates.map((placement, index): PlacementResult => {
     const firstLineCount = childrenOf(snapshot, placement.id).length;
-    const eligible = firstLineCount < planConfig.firstLineLimit;
+    const eligible = firstLineCount < planConfig.firstLineLimit && !subIdLimitReached;
     if (!eligible) {
       return {
         placementMemberId: placement.id, placementMemberName: placement.displayName, eligible: false, rank: null,
         grossDelta: 0, estimatedNetDelta: 0, titleBefore: beforeTitle.achievedTitle, titleAfter: beforeTitle.achievedTitle,
         bonusDelta: emptyPlacementBonusDelta(),
         missingBefore: missingCount(beforeTitle), missingAfter: missingCount(beforeTitle), earliestAchievementPeriod: null,
-        reasons: [], warnings: ["1次ライン上限7名に達しています"]
+        ownedIdCountBefore, ownedIdCountAfter: ownedIdCountBefore,
+        reasons: [], warnings: [
+          ...(firstLineCount >= planConfig.firstLineLimit ? ["1次ライン上限7名に達しています"] : []),
+          ...(subIdLimitReached ? [`自分のサブIDは通常上限${planConfig.maxSubIdsPerMaster}件に達しています`] : [])
+        ]
       };
     }
     const simulated = cloneWithCandidate(snapshot, request, placement.id, String(index + 1));
@@ -630,9 +665,12 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
       missingBefore: missingCount(beforeTitle),
       missingAfter: missingCount(afterTitle),
       earliestAchievementPeriod: titleAtLeast(afterTitle.achievedTitle, request.targetTitle) ? request.period : null,
+      ownedIdCountBefore,
+      ownedIdCountAfter: ownedIds(simulated, root.id).length,
       reasons,
       warnings: [
         "参考シミュレーションです。登録後の配置は公式サイトで確認してください",
+        ...(request.idKind === "sub" ? ["自分のサブIDとして、そのIDで発生するボーナスをメインIDの収入へ合算しています。不要なサブID登録は行わないでください"] : []),
         ...(request.trainerBonusRole ? ["Aさん役の報酬は、該当トレーナー資格を有し申請書へ記載される場合の初回購入時のみです"] : []),
         ...(request.course === "I" && request.trainerBonusRole?.startsWith("ST") ? ["IコースはSトレーナー対象外のため、トレーナーボーナスは0円です"] : [])
       ]
@@ -794,6 +832,7 @@ export function runForecast(
       title,
       gross: bonus.gross,
       estimatedNet: bonus.estimatedNet,
+      ownedIdCount: ownedIds(snapshot, rootId).length,
       directRegistrations,
       teamRegistrations,
       retainedMembers: Math.max(0, retainedIds.size - (retainedIds.has(rootId) ? 1 : 0)) + additions.length

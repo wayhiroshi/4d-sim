@@ -9,6 +9,7 @@ import {
   evaluateTitleChecklists,
   generateMissions,
   groupPv,
+  ownedIds,
   periodForDate,
   runForecast,
   simulatePlacements
@@ -95,6 +96,7 @@ const purchaseSchema = z.object({
 const simulationSchema = z.object({
   candidateName: z.string().min(1).max(80),
   course: courseSchema,
+  idKind: z.enum(["master", "sub"]).default("master"),
   period: periodSchema,
   targetTitle: titleSchema,
   placementCandidateIds: z.array(z.string()).optional(),
@@ -107,6 +109,7 @@ const simulationMemberSchema = z.object({
   parentMemberId: z.string().min(1).max(80),
   period: periodSchema,
   course: courseSchema,
+  idKind: z.enum(["master", "sub"]).default("master"),
   trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null)
 });
 const displayNameSchema = z.object({ displayName: z.string().trim().min(1).max(80) });
@@ -208,6 +211,7 @@ app.get("/api/v1/dashboard", async (context) => {
     groupMembers: snapshot.members.length - 1,
     title,
     bonus,
+    ownedIdCount: ownedIds(snapshot, rootMember.id).length,
     missions: generateMissions(title)
   };
   return context.json(data);
@@ -254,7 +258,9 @@ app.get("/api/v1/simulation-organization", async (context) => {
     bonusComparison: {
       actual: actualBonus,
       simulated: simulatedBonus,
-      delta: compareBonusBreakdowns(actualBonus, simulatedBonus)
+      delta: compareBonusBreakdowns(actualBonus, simulatedBonus),
+      actualOwnedIdCount: ownedIds(snapshot, rootMember.id).length,
+      simulatedOwnedIdCount: ownedIds(simulatedSnapshot, rootMember.id).length
     }
   };
   return context.json(data);
@@ -275,14 +281,19 @@ app.post("/api/v1/simulation-members", async (context) => {
   if (snapshot.members.filter((member) => member.parentMemberId === parent.id && member.endedPeriod === null).length >= planConfig.firstLineLimit) {
     return context.json({ error: "配置先の1次ラインが上限7名です" }, 400);
   }
+  if (input.idKind === "sub" && ownedIds(snapshot, root.id).length - 1 >= planConfig.maxSubIdsPerMaster) {
+    return context.json({ error: `自分のサブIDは通常${planConfig.maxSubIdsPerMaster}件までです` }, 400);
+  }
   const simulationMember: SimulationMember = {
     id: `trial-${crypto.randomUUID()}`,
     workspaceId,
     displayName: input.displayName,
     parentMemberId: parent.id,
     introducerMemberId: root.id,
+    masterMemberId: input.idKind === "sub" ? root.id : null,
     trainerMemberId: input.trainerBonusRole ? root.id : null,
     trainerBonusRole: input.trainerBonusRole,
+    idKind: input.idKind,
     course: input.course,
     period: input.period,
     createdAt: new Date().toISOString()
@@ -314,6 +325,16 @@ app.post("/api/v1/members", async (context) => {
   const references = [input.parentMemberId, input.introducerMemberId, input.masterMemberId, input.trainerMemberId].filter((id): id is string => Boolean(id));
   if (references.some((id) => !memberIds.has(id))) {
     return context.json({ error: "配置親、紹介者、マスターID、トレーナーのいずれかが存在しません" }, 400);
+  }
+  if (input.idKind === "sub") {
+    if (!input.masterMemberId) return context.json({ error: "サブIDには本人のマスターIDが必要です" }, 400);
+    const master = snapshot.members.find((member) => member.id === input.masterMemberId && member.idKind === "master");
+    if (!master) return context.json({ error: "指定したマスターIDが存在しません" }, 400);
+    if (ownedIds(snapshot, master.id).length - 1 >= planConfig.maxSubIdsPerMaster) {
+      return context.json({ error: `サブIDは通常${planConfig.maxSubIdsPerMaster}件までです` }, 400);
+    }
+  } else if (input.masterMemberId) {
+    return context.json({ error: "マスターIDには所有元のマスターIDを指定できません" }, 400);
   }
   if (!input.parentMemberId && snapshot.members.some((member) => member.parentMemberId === null)) {
     return context.json({ error: "ルート会員はすでに登録されています" }, 400);
