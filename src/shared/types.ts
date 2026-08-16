@@ -379,6 +379,7 @@ export interface BatchPlacementStep {
   missingBefore: number;
   missingAfter: number;
   grossDelta: number;
+  lineDelta: number;
   estimatedNetDelta: number;
 }
 

@@ -456,6 +456,7 @@ describe("batch placement simulation", () => {
     expect(first).toEqual(second);
     expect(first).toMatchObject({ requestedCount: 20, placedCount: 20, unplacedCount: 0, strategy: "sequential" });
     expect(first.steps).toHaveLength(20);
+    expect(first.steps.every((step) => Number.isFinite(step.lineDelta))).toBe(true);
     expect(first.steps.map((step) => step.candidateName)).toEqual(Array.from({ length: 20 }, (_, index) => `候補${index + 1}`));
     expect(data).toEqual(original);
   });

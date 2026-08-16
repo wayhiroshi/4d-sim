@@ -884,6 +884,7 @@ export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request:
       missingBefore: best.missingBefore,
       missingAfter: best.missingAfter,
       grossDelta: best.incomeComparison.combined.grossDelta,
+      lineDelta: best.incomeComparison.self.delta.line + (best.incomeComparison.partner?.delta.line ?? 0),
       estimatedNetDelta: best.incomeComparison.combined.estimatedNetDelta
     });
   }
