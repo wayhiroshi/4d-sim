@@ -13,6 +13,7 @@ import {
   periodForDate,
   runForecast,
   simulateBatchPlacements,
+  simulateGrowthStory,
   simulatePlacements
 } from "./engine";
 import type { CourseCode, ForecastScenario, Member, OrganizationSnapshot, PurchaseEvent, SimulationMember, TaxProfile } from "../shared/types";
@@ -456,6 +457,7 @@ describe("batch placement simulation", () => {
     expect(first).toEqual(second);
     expect(first).toMatchObject({ requestedCount: 20, placedCount: 20, unplacedCount: 0, strategy: "sequential" });
     expect(first.steps).toHaveLength(20);
+    expect(first.steps.every((step) => Number.isFinite(step.lineDelta))).toBe(true);
     expect(first.steps.map((step) => step.candidateName)).toEqual(Array.from({ length: 20 }, (_, index) => `候補${index + 1}`));
     expect(data).toEqual(original);
   });
@@ -465,6 +467,56 @@ describe("batch placement simulation", () => {
     const result = simulateBatchPlacements(data, { ...request, candidateCount: 10, idKind: "sub" });
     expect(result).toMatchObject({ requestedCount: 10, placedCount: 5, unplacedCount: 5, ownedIdCountBefore: 1, ownedIdCountAfter: 6 });
     expect(result.warnings.some((warning) => warning.includes("5人は配置できませんでした"))).toBe(true);
+  });
+});
+
+describe("growth story simulation", () => {
+  const request = {
+    candidateName: "試算",
+    course: "A" as const,
+    idKind: "master" as const,
+    period,
+    targetTitle: "LD" as const,
+    incomeMode: "self" as const,
+    partnerMemberId: null,
+    trainerBonusRole: null,
+    startingMemberId: "root",
+    taxProfile: tax
+  };
+
+  it("builds the ideal three-by-three story through eight generations", () => {
+    const data = snapshot([member("root", null, "G")], [purchase("root", "root", 10670)]);
+    const original = structuredClone(data);
+    const result = simulateGrowthStory(data, { ...request, story: "three-by-three" });
+    expect(result).toMatchObject({
+      strategy: "three-by-three",
+      requestedCount: 9840,
+      placedCount: 9840,
+      generationCounts: [3, 9, 27, 81, 243, 729, 2187, 6561]
+    });
+    expect(result.generations.at(-1)).toMatchObject({ generation: 8, memberCount: 6561, cumulativeMemberCount: 9840 });
+    expect(result.generations.at(-1)?.cumulativePv).toBe(9840 * 5330);
+    expect(result.bonusDelta.oneTime).toBe(0);
+    expect(result.bonusDelta.line).toBeGreaterThan(0);
+    expect(data).toEqual(original);
+  });
+
+  it("builds the realistic one-by-one story as a deterministic eight-member chain", () => {
+    const data = snapshot([member("root", null, "G")], [purchase("root", "root", 10670)]);
+    const first = simulateGrowthStory(data, { ...request, story: "one-by-one" });
+    const second = simulateGrowthStory(data, { ...request, story: "one-by-one" });
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({ strategy: "one-by-one", requestedCount: 8, placedCount: 8 });
+    expect(first.generationCounts).toEqual(Array.from({ length: 8 }, () => 1));
+    expect(first.generations.at(-1)).toMatchObject({ generation: 8, cumulativeMemberCount: 8, cumulativePv: 8 * 5330 });
+  });
+
+  it("rejects a story when its starting line lacks room for the first generation", () => {
+    const members = [member("root", null, "G"), ...Array.from({ length: 6 }, (_, index) => member(`m${index}`, "root"))];
+    expect(() => simulateGrowthStory(
+      snapshot(members, members.map((item) => purchase(`p-${item.id}`, item.id, item.course === "G" ? 10670 : 5330))),
+      { ...request, story: "three-by-three" }
+    )).toThrow("空きが足りません");
   });
 });
 

@@ -14,6 +14,7 @@ import {
   periodForDate,
   runForecast,
   simulateBatchPlacements,
+  simulateGrowthStory,
   simulatePlacements
 } from "../src/domain/engine";
 import { planConfig } from "../src/domain/plan";
@@ -122,6 +123,10 @@ const simulationSchema = simulationInputSchema.superRefine(validatePairIncome);
 const batchSimulationSchema = simulationInputSchema.extend({
   candidateCount: z.number().int().min(2).max(20)
 }).superRefine(validatePairIncome);
+const growthStorySimulationSchema = simulationInputSchema.extend({
+  story: z.enum(["three-by-three", "one-by-one"]),
+  startingMemberId: z.string().min(1).max(120)
+}).superRefine(validatePairIncome);
 
 const simulationMemberSchema = z.object({
   displayName: z.string().trim().min(1).max(80),
@@ -136,6 +141,7 @@ const batchSimulationMemberSchema = z.object({
     tempId: z.string().min(1).max(120),
     displayName: z.string().trim().min(1).max(80),
     parentMemberId: z.string().min(1).max(120),
+    introducerMemberId: z.string().min(1).max(120).optional(),
     period: periodSchema,
     course: courseSchema,
     idKind: z.enum(["master", "sub"]),
@@ -375,8 +381,13 @@ app.post("/api/v1/simulation-members/batch", async (context) => {
 
   for (const [index, item] of input.members.entries()) {
     const parentMemberId = resolvedIds.get(item.parentMemberId) ?? item.parentMemberId;
+    const introducerMemberId = item.introducerMemberId
+      ? resolvedIds.get(item.introducerMemberId) ?? item.introducerMemberId
+      : root.id;
     const parent = working.members.find((member) => member.id === parentMemberId && member.endedPeriod === null);
+    const introducer = working.members.find((member) => member.id === introducerMemberId && member.endedPeriod === null);
     if (!parent) return context.json({ error: `${index + 1}人目の配置先が存在しません` }, 400);
+    if (!introducer) return context.json({ error: `${index + 1}人目の紹介者が存在しません` }, 400);
     if (working.members.filter((member) => member.parentMemberId === parent.id && member.endedPeriod === null).length >= planConfig.firstLineLimit) {
       return context.json({ error: `${index + 1}人目の配置先は1次ライン上限7名です` }, 400);
     }
@@ -388,7 +399,7 @@ app.post("/api/v1/simulation-members/batch", async (context) => {
       workspaceId,
       displayName: item.displayName,
       parentMemberId: parent.id,
-      introducerMemberId: root.id,
+      introducerMemberId: introducer.id,
       masterMemberId: item.idKind === "sub" ? root.id : null,
       trainerMemberId: item.trainerBonusRole ? root.id : null,
       trainerBonusRole: item.trainerBonusRole,
@@ -549,6 +560,34 @@ app.post("/api/v1/simulations/batch", async (context) => {
     if (invalidPartner) return context.json({ error: "選択したパートナーは2名合算の対象にできません" }, 400);
   }
   return context.json({ result: simulateBatchPlacements(snapshot, request) });
+});
+
+app.post("/api/v1/simulations/story", async (context) => {
+  const request = await boundedJson(context.req.raw, growthStorySimulationSchema);
+  const workspaceId = context.get("workspaceId");
+  const [actual, simulationMembers] = await Promise.all([
+    loadSnapshot(context.env.DB, workspaceId, request.period),
+    listSimulationMembers(context.env.DB, workspaceId, request.period)
+  ]);
+  const snapshot = applySimulationMembers(actual, simulationMembers);
+  const root = snapshot.members.find((member) => member.parentMemberId === null);
+  const startingMember = snapshot.members.find((member) => member.id === request.startingMemberId);
+  if (!root || !startingMember || (startingMember.endedPeriod !== null && startingMember.endedPeriod <= snapshot.period)) {
+    return context.json({ error: "ストーリーの起点にできるメンバーがいません" }, 400);
+  }
+  const requiredFirstLineSlots = request.story === "three-by-three" ? 3 : 1;
+  const activeChildren = snapshot.members.filter((member) =>
+    member.parentMemberId === startingMember.id && (member.endedPeriod === null || member.endedPeriod > snapshot.period)
+  ).length;
+  if (activeChildren + requiredFirstLineSlots > planConfig.firstLineLimit) {
+    return context.json({ error: `選択した起点の1次ラインに${requiredFirstLineSlots}人分の空きがありません` }, 400);
+  }
+  if (request.incomeMode === "pair") {
+    const partner = snapshot.members.find((member) => member.id === request.partnerMemberId);
+    const invalidPartner = !partner || partner.id === root.id || partner.idKind !== "master" || partner.masterMemberId !== null || (partner.endedPeriod !== null && partner.endedPeriod <= snapshot.period);
+    if (invalidPartner) return context.json({ error: "選択したパートナーは2名合算の対象にできません" }, 400);
+  }
+  return context.json({ result: simulateGrowthStory(snapshot, { ...request, idKind: "master" }) });
 });
 
 app.post("/api/v1/forecasts", async (context) => {

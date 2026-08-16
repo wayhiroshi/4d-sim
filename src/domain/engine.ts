@@ -8,6 +8,8 @@ import {
   type CourseCode,
   type ForecastResult,
   type ForecastScenario,
+  type GrowthStorySimulationRequest,
+  type GrowthStorySimulationResult,
   type Member,
   type Mission,
   type OrganizationSnapshot,
@@ -87,14 +89,27 @@ function childrenOf(snapshot: OrganizationSnapshot, memberId: string): Member[] 
 
 export function descendants(snapshot: OrganizationSnapshot, rootId: string): Array<{ member: Member; depth: number }> {
   const output: Array<{ member: Member; depth: number }> = [];
-  const queue = childrenOf(snapshot, rootId).map((member) => ({ member, depth: 1 }));
+  const childrenByParent = new Map<string, Member[]>();
+  for (const member of snapshot.members) {
+    if (member.parentMemberId === null) continue;
+    const siblings = childrenByParent.get(member.parentMemberId) ?? [];
+    siblings.push(member);
+    childrenByParent.set(member.parentMemberId, siblings);
+  }
+  const queue = (childrenByParent.get(rootId) ?? []).map((member) => ({ member, depth: 1 }));
   const visited = new Set<string>([rootId]);
   while (queue.length) {
     const item = queue.shift();
     if (!item || visited.has(item.member.id)) continue;
     visited.add(item.member.id);
+    const ended = item.member.endedPeriod !== null && item.member.endedPeriod <= snapshot.period;
+    if (ended && planConfig.compression.enabled && planConfig.compression.promoteEndedMembers) {
+      for (const child of childrenByParent.get(item.member.id) ?? []) queue.push({ member: child, depth: item.depth });
+      continue;
+    }
+    if (ended) continue;
     output.push(item);
-    for (const child of childrenOf(snapshot, item.member.id)) queue.push({ member: child, depth: item.depth + 1 });
+    for (const child of childrenByParent.get(item.member.id) ?? []) queue.push({ member: child, depth: item.depth + 1 });
   }
   return output;
 }
@@ -651,7 +666,8 @@ function cloneWithCandidate(
   snapshot: OrganizationSnapshot,
   request: SimulationRequest,
   placementMemberId: string,
-  suffix: string
+  suffix: string,
+  introducerMemberId = snapshot.members.find((member) => member.parentMemberId === null)?.id ?? placementMemberId
 ): OrganizationSnapshot {
   const id = `simulation-${suffix}`;
   const candidate: Member = {
@@ -659,7 +675,7 @@ function cloneWithCandidate(
     workspaceId: snapshot.workspaceId,
     displayName: request.candidateName,
     parentMemberId: placementMemberId,
-    introducerMemberId: snapshot.members.find((member) => member.parentMemberId === null)?.id ?? placementMemberId,
+    introducerMemberId,
     masterMemberId: request.idKind === "sub" ? snapshot.members.find((member) => member.parentMemberId === null)?.id ?? null : null,
     trainerMemberId: request.trainerBonusRole ? snapshot.members.find((member) => member.parentMemberId === null)?.id ?? null : null,
     trainerBonusRole: request.trainerBonusRole ?? null,
@@ -884,6 +900,7 @@ export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request:
       missingBefore: best.missingBefore,
       missingAfter: best.missingAfter,
       grossDelta: best.incomeComparison.combined.grossDelta,
+      lineDelta: best.incomeComparison.self.delta.line + (best.incomeComparison.partner?.delta.line ?? 0),
       estimatedNetDelta: best.incomeComparison.combined.estimatedNetDelta
     });
   }
@@ -913,6 +930,153 @@ export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request:
       "各1名を追加するたびに全配置候補を再計算する逐次最適配置です。全組合せの絶対的な最適解を保証するものではありません",
       "参考シミュレーションです。公式登録や現在の試算組織は、この計算だけでは変更されません",
       ...(placedCount < request.candidateCount ? [`配置上限またはサブID上限により${request.candidateCount - placedCount}人は配置できませんでした`] : [])
+    ]
+  };
+}
+
+const GROWTH_STORY_GENERATIONS = 8;
+
+const growthStoryCounts = (story: GrowthStorySimulationRequest["story"]): number[] =>
+  Array.from({ length: GROWTH_STORY_GENERATIONS }, (_, index) => story === "three-by-three" ? 3 ** (index + 1) : 1);
+
+function buildGrowthStorySnapshot(
+  snapshot: OrganizationSnapshot,
+  request: GrowthStorySimulationRequest,
+  startingMember: Member,
+  generationCounts: number[]
+): OrganizationSnapshot {
+  const output: OrganizationSnapshot = {
+    ...snapshot,
+    members: [...snapshot.members],
+    purchases: [...snapshot.purchases]
+  };
+  const branchFactor = request.story === "three-by-three" ? 3 : 1;
+  const largestConfiguredGroup = Math.max(0, ...planConfig.titles.map((title) => title.groupMembers ?? 0));
+  const representationLimit = largestConfiguredGroup + GROWTH_STORY_GENERATIONS;
+  let representedTotal = 0;
+  let parents = [startingMember];
+
+  for (const [generationIndex, logicalCount] of generationCounts.entries()) {
+    const generation = generationIndex + 1;
+    const laterGenerations = generationCounts.length - generation;
+    const available = Math.max(1, representationLimit - representedTotal - laterGenerations);
+    const representedCount = Math.min(logicalCount, available);
+    const created: Member[] = [];
+    for (let index = 0; index < representedCount; index += 1) {
+      const parent = generation === 1 ? startingMember : parents[Math.floor(index / branchFactor)] ?? parents[index % parents.length];
+      if (!parent) throw new Error("A represented story parent is required");
+      const id = `simulation-story-${request.story}-${generation}-${index + 1}`;
+      const candidate: Member = {
+        id,
+        workspaceId: snapshot.workspaceId,
+        displayName: `${request.candidateName}${generation}-${index + 1}`,
+        parentMemberId: parent.id,
+        introducerMemberId: parent.id,
+        masterMemberId: null,
+        trainerMemberId: null,
+        trainerBonusRole: null,
+        idKind: "master",
+        course: request.course,
+        title: "NONE",
+        trainerCredential: "NONE",
+        sponsorLicense: false,
+        openStudioAttendances: 0,
+        preTrainerCourseCompleted: false,
+        preTrainerKitPurchased: false,
+        startTrainerCourseCompleted: false,
+        startTrainerKitPurchased: false,
+        directorPromotedPeriod: null,
+        joinedPeriod: request.period,
+        endedPeriod: null
+      };
+      created.push(candidate);
+      output.members.push(candidate);
+      output.purchases.push({
+        id: `simulation-story-repeat-${generation}-${index + 1}`,
+        workspaceId: snapshot.workspaceId,
+        memberId: id,
+        period: request.period,
+        productCode: null,
+        kind: "repeat",
+        status: "confirmed",
+        quantity: 1,
+        price: 0,
+        pv: index === 0 ? logicalCount * planConfig.courses[request.course].recurringPv : 0
+      });
+    }
+    representedTotal += representedCount;
+    parents = created;
+  }
+  return output;
+}
+
+export function simulateGrowthStory(
+  snapshot: OrganizationSnapshot,
+  request: GrowthStorySimulationRequest
+): GrowthStorySimulationResult {
+  const root = snapshot.members.find((member) => member.parentMemberId === null);
+  if (!root) throw new Error("Root member is required");
+  const startingMember = snapshot.members.find((member) => member.id === request.startingMemberId);
+  if (!startingMember || (startingMember.endedPeriod !== null && startingMember.endedPeriod <= snapshot.period)) {
+    throw new Error("An active story starting member is required");
+  }
+  const incomeMode = request.incomeMode ?? "self";
+  const partner = incomeMode === "pair"
+    ? snapshot.members.find((member) => member.id === request.partnerMemberId) ?? null
+    : null;
+  if (incomeMode === "pair" && (!partner || partner.id === root.id || partner.idKind !== "master" || partner.masterMemberId !== null || (partner.endedPeriod !== null && partner.endedPeriod <= snapshot.period))) {
+    throw new Error("An active partner master ID is required for pair income simulation");
+  }
+
+  const generationCounts = growthStoryCounts(request.story);
+  const requestedCount = generationCounts.reduce((sum, count) => sum + count, 0);
+  const branchFactor = request.story === "three-by-three" ? 3 : 1;
+  if (childrenOf(snapshot, startingMember.id).length + branchFactor > planConfig.firstLineLimit) {
+    throw new Error("ストーリーの起点は1次ラインの空きが足りません");
+  }
+  const initialTitle = evaluateTitle(snapshot, root.id);
+  const initialBonus = computeBonus(snapshot, root.id, request.taxProfile);
+  const initialPartnerBonus = partner ? computeBonus(snapshot, partner.id, request.taxProfile) : null;
+  const ownedIdCountBefore = ownedIds(snapshot, root.id).length;
+  const working = buildGrowthStorySnapshot(snapshot, request, startingMember, generationCounts);
+
+  const finalTitle = evaluateTitle(working, root.id);
+  const finalBonus = computeBonus(working, root.id, request.taxProfile);
+  const finalPartnerBonus = partner ? computeBonus(working, partner.id, request.taxProfile) : null;
+  const incomeComparison = placementIncomeComparison(
+    incomeMode, root, initialBonus, finalBonus, partner, initialPartnerBonus, finalPartnerBonus
+  );
+  let cumulativeMemberCount = 0;
+  let cumulativePv = 0;
+  const generations = generationCounts.map((memberCount, index) => {
+    const pv = memberCount * planConfig.courses[request.course].recurringPv;
+    cumulativeMemberCount += memberCount;
+    cumulativePv += pv;
+    return { generation: index + 1, memberCount, cumulativeMemberCount, pv, cumulativePv };
+  });
+  const storyLabel = request.story === "three-by-three" ? "理想型 3人→3人ずつ×8段" : "現実型 1人→1人ずつ×8段";
+  return {
+    strategy: request.story,
+    storyLabel,
+    requestedCount,
+    placedCount: requestedCount,
+    unplacedCount: 0,
+    generationCounts,
+    generations,
+    titleBefore: initialTitle.achievedTitle,
+    titleAfter: finalTitle.achievedTitle,
+    missingBefore: missingCount(initialTitle),
+    missingAfter: missingCount(finalTitle),
+    ownedIdCountBefore,
+    ownedIdCountAfter: ownedIds(working, root.id).length,
+    bonusDelta: compareBonusBreakdowns(initialBonus, finalBonus),
+    incomeComparison,
+    warnings: [
+      "8段へ到達した時点で、全員が同じ1営業月に継続していると仮定する遠い未来の試算です",
+      "初回登録時のスタート・トレーナーボーナスは含めず、継続時の報酬とラインボーナスを表示します",
+      "実際の紹介速度、継続率、収入を予測または保証するものではありません",
+      "追加メンバー自身の将来タイトルや資格取得は仮定せず、現在の公式条件で本人のタイトルだけを判定します",
+      "大人数は公式ルールに必要な人数と、各段のp.v.合計に圧縮して計算しています。試算組織へは保存されません"
     ]
   };
 }
