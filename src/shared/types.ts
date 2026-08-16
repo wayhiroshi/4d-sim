@@ -310,6 +310,10 @@ export interface SimulationRequest {
   taxProfile: TaxProfile;
 }
 
+export interface BatchSimulationRequest extends SimulationRequest {
+  candidateCount: number;
+}
+
 export interface PlacementBonusDelta {
   start: number;
   trainer: number;
@@ -362,6 +366,47 @@ export interface PlacementResult {
   ownedIdCountAfter: number;
   reasons: string[];
   warnings: string[];
+}
+
+export interface BatchPlacementStep {
+  sequence: number;
+  candidateMemberId: string;
+  candidateName: string;
+  placementMemberId: string;
+  placementMemberName: string;
+  titleBefore: TitleCode;
+  titleAfter: TitleCode;
+  missingBefore: number;
+  missingAfter: number;
+  grossDelta: number;
+  estimatedNetDelta: number;
+}
+
+export interface BatchSimulationResult {
+  strategy: "sequential";
+  requestedCount: number;
+  placedCount: number;
+  unplacedCount: number;
+  steps: BatchPlacementStep[];
+  titleBefore: TitleCode;
+  titleAfter: TitleCode;
+  missingBefore: number;
+  missingAfter: number;
+  ownedIdCountBefore: number;
+  ownedIdCountAfter: number;
+  bonusDelta: PlacementBonusDelta;
+  incomeComparison: PlacementIncomeComparison;
+  warnings: string[];
+}
+
+export interface BatchSimulationMemberInput {
+  tempId: string;
+  displayName: string;
+  parentMemberId: string;
+  course: CourseCode;
+  period: string;
+  idKind: IdKind;
+  trainerBonusRole: TrainerBonusRole | null;
 }
 
 export interface ForecastMonthlyInput {

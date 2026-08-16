@@ -41,4 +41,18 @@ describe("Worker API", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: "入力内容を確認してください" });
   });
+
+  it("rejects batch simulations over 20 people before database access", async () => {
+    const response = await app.request("https://example.test/api/v1/simulations/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateName: "候補", candidateCount: 21, course: "A", idKind: "master", period: "2026-07", targetTitle: "LD",
+        incomeMode: "self", partnerMemberId: null,
+        taxProfile: { invoiceRegistered: true, withholdingRate: 0, transferFee: 0, offsets: 0, priorCarryover: 0 }
+      })
+    }, bindings);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "入力内容を確認してください" });
+  });
 });
