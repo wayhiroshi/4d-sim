@@ -153,9 +153,14 @@ const batchSimulationMemberSchema = z.object({
 const displayNameSchema = z.object({ displayName: z.string().trim().min(1).max(80) });
 const memberIdentitySchema = z.object({
   displayName: z.string().trim().min(1).max(80),
-  idKind: z.enum(["master", "sub"])
+  idKind: z.enum(["master", "sub"]),
+  masterMemberId: nullableId
 });
-const simulationMemberIdentitySchema = memberIdentitySchema.extend({ period: periodSchema });
+const simulationMemberIdentitySchema = z.object({
+  displayName: z.string().trim().min(1).max(80),
+  idKind: z.enum(["master", "sub"]),
+  period: periodSchema
+});
 const trainerProfileSchema = z.object({
   trainerCredential: z.enum(["NONE", "PT", "ST"]),
   sponsorLicense: z.boolean(),
@@ -528,14 +533,20 @@ app.patch("/api/v1/members/:id/identity", async (context) => {
   if (input.idKind === "sub" && snapshot.members.some((item) => item.masterMemberId === member.id && item.idKind === "sub")) {
     return context.json({ error: "サブIDを所有しているメンバーはサブIDへ変更できません" }, 400);
   }
-  const otherSubIds = snapshot.members.filter((item) => item.id !== id && item.idKind === "sub" && item.masterMemberId === root.id).length;
+  const requestedMaster = input.idKind === "sub"
+    ? snapshot.members.find((item) => item.id === input.masterMemberId && item.idKind === "master" && item.id !== member.id && (item.endedPeriod === null || item.endedPeriod > snapshot.period)) ?? null
+    : null;
+  if (input.idKind === "sub" && !requestedMaster) {
+    return context.json({ error: "サブIDの所有者となる有効なマスターIDを選択してください" }, 400);
+  }
+  const otherSubIds = snapshot.members.filter((item) => item.id !== id && item.idKind === "sub" && item.masterMemberId === requestedMaster?.id).length;
   if (input.idKind === "sub" && otherSubIds >= planConfig.maxSubIdsPerMaster) {
-    return context.json({ error: `自分のサブIDは通常${planConfig.maxSubIdsPerMaster}件までです` }, 400);
+    return context.json({ error: `選択したマスターIDのサブIDは通常${planConfig.maxSubIdsPerMaster}件までです` }, 400);
   }
   const updated = await updateMemberIdentity(
     context.env.DB, workspaceId, id, input.displayName, input.idKind,
-    input.idKind === "sub" ? root.id : null,
-    input.idKind === "sub" ? root.id : member.introducerMemberId
+    requestedMaster?.id ?? null,
+    requestedMaster?.id ?? member.introducerMemberId
   );
   if (!updated) return context.json({ error: "メンバーが見つかりません" }, 404);
   return context.json({ id, displayName: input.displayName, idKind: input.idKind });

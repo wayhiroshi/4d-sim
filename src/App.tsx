@@ -162,15 +162,17 @@ function Organization() {
   const trialIds = useMemo(() => new Set(data?.simulationMembers.map((member) => member.id) ?? []), [data]);
   const actualMembers = snapshot?.members.filter((member) => !trialIds.has(member.id) && member.endedPeriod === null) ?? [];
   const rootMember = actualMembers.find((member) => member.parentMemberId === null) ?? actualMembers[0] ?? null;
+  const actualMasterMembers = actualMembers.filter((member) => member.idKind === "master" && member.masterMemberId === null);
   const selected = snapshot?.members.find((member) => member.id === selectedId) ?? snapshot?.members[0] ?? null;
   const addMember = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); if (!snapshot || !rootMember) return;
     const form = event.currentTarget; const values = new FormData(form); setBusy(true); setMessage(null);
     try {
+      const subOwnerId = manualIdKind === "sub" ? String(values.get("subOwner") || rootMember.id) : null;
       const member = await api.createMember({
         displayName: String(values.get("name")), parentMemberId: String(values.get("parent")),
-        introducerMemberId: manualIdKind === "sub" ? rootMember.id : String(values.get("introducer")),
-        masterMemberId: manualIdKind === "sub" ? rootMember.id : null, trainerMemberId: null,
+        introducerMemberId: manualIdKind === "sub" ? subOwnerId : String(values.get("introducer")),
+        masterMemberId: subOwnerId, trainerMemberId: null,
         idKind: manualIdKind, course: String(values.get("course")) as CourseCode, title: "NONE",
         trainerCredential: "NONE", sponsorLicense: false,
         openStudioAttendances: 0, preTrainerCourseCompleted: false, preTrainerKitPurchased: false,
@@ -214,10 +216,11 @@ function Organization() {
     <form className="panel manual-member-form" onSubmit={(event) => void addMember(event)}>
       <div className="manual-member-heading"><p className="eyebrow">APP MEMBER</p><h2>実メンバーを手動追加</h2><p>公式会員IDは不要です。会員サイトのスクショを見ながら入力でき、画像自体はNavigatorへ保存しません。</p></div>
       <label>アプリ内表示名<input name="name" required maxLength={80} placeholder="例：山田さん、Aさん" /></label>
-      <label>IDの扱い<select name="idKind" value={manualIdKind} onChange={(event) => setManualIdKind(event.target.value as IdKind)}><option value="master">通常の会員（マスターID）</option><option value="sub">自分のサブID</option></select><small className="field-note">サブIDは本人のマスターIDへ紐づけ、報酬を合算します</small></label>
+      <label>IDの扱い<select name="idKind" value={manualIdKind} onChange={(event) => setManualIdKind(event.target.value as IdKind)}><option value="master">通常の会員（マスターID）</option><option value="sub">サブID（所有者を指定）</option></select><small className="field-note">サブIDは選んだ所有者の収入へ合算します</small></label>
       <label>コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label>
       <label>配置先<select name="parent" defaultValue={rootMember?.id}>{actualMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>
       {manualIdKind === "master" && <label>紹介者<select name="introducer" defaultValue={rootMember?.id}>{actualMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>}
+      {manualIdKind === "sub" && <label>サブIDの所有者<select name="subOwner" defaultValue={rootMember?.id}>{actualMasterMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select><small className="field-note">本人またはパートナーのマスターIDを選択</small></label>}
       <button className="primary-button" disabled={busy || !rootMember}>{busy ? "追加中…" : "実組織へ追加"}</button>
       <p className="manual-member-note">この操作はNavigator内だけに保存され、フォーデイズ公式サイトの登録・配置は変更しません。</p>
     </form>
@@ -238,7 +241,7 @@ function Organization() {
       <section className="panel tree-panel">
         {snapshot?.members.filter((member) => member.parentMemberId === null).map((root) => <TreeNode key={root.id} member={root} snapshot={snapshot} simulationIds={trialIds} depth={0} selectedId={selected?.id ?? null} onSelect={setSelectedId} />)}
       </section>
-      {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} rootMemberId={rootMember?.id ?? null} onUpdated={(displayName, idKind) => { setMessage(`「${displayName}」を${idKind === "sub" ? "サブID" : "マスターID"}として保存しました`); reload(); }} />}
+      {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} simulationIds={trialIds} rootMemberId={rootMember?.id ?? null} onUpdated={(displayName, idKind) => { setMessage(`「${displayName}」を${idKind === "sub" ? "サブID" : "マスターID"}として保存しました`); reload(); }} />}
     </div>
   </>}</PageState>;
 }
@@ -265,21 +268,28 @@ function TreeNode({ member, snapshot, simulationIds, depth, selectedId, onSelect
   </div>;
 }
 
-function MemberDetail({ member, snapshot, simulation = false, rootMemberId, onUpdated }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean; rootMemberId: string | null; onUpdated: (displayName: string, idKind: IdKind) => void }) {
+function MemberDetail({ member, snapshot, simulation = false, simulationIds, rootMemberId, onUpdated }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean; simulationIds: Set<string>; rootMemberId: string | null; onUpdated: (displayName: string, idKind: IdKind) => void }) {
   const purchases = snapshot.purchases.filter((purchase) => purchase.memberId === member.id).slice(-5).reverse();
-  const [editing, setEditing] = useState(false); const [displayName, setDisplayName] = useState(member.displayName); const [idKind, setIdKind] = useState<IdKind>(member.idKind); const [saving, setSaving] = useState(false); const [editError, setEditError] = useState<string | null>(null);
-  useEffect(() => { setDisplayName(member.displayName); setIdKind(member.idKind); setEditing(false); setEditError(null); }, [member.id, member.displayName, member.idKind]);
+  const [editing, setEditing] = useState(false); const [displayName, setDisplayName] = useState(member.displayName); const [idKind, setIdKind] = useState<IdKind>(member.idKind); const [masterMemberId, setMasterMemberId] = useState(member.masterMemberId ?? rootMemberId ?? ""); const [saving, setSaving] = useState(false); const [editError, setEditError] = useState<string | null>(null);
+  useEffect(() => { setDisplayName(member.displayName); setIdKind(member.idKind); setMasterMemberId(member.masterMemberId ?? rootMemberId ?? ""); setEditing(false); setEditError(null); }, [member.id, member.displayName, member.idKind, member.masterMemberId, rootMemberId]);
+  const masterOptions = snapshot.members.filter((item) => item.id !== member.id && item.idKind === "master" && item.masterMemberId === null && !simulationIds.has(item.id) && item.endedPeriod === null);
+  const owner = snapshot.members.find((item) => item.id === member.masterMemberId) ?? null;
   const saveIdentity = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const nextName = displayName.trim(); if (!nextName) return; setSaving(true); setEditError(null);
-    try { if (simulation) await api.updateSimulationMemberIdentity(member.id, nextName, idKind, snapshot.period); else await api.updateMemberIdentity(member.id, nextName, idKind); setEditing(false); onUpdated(nextName, idKind); }
+    try {
+      if (!simulation && idKind === "sub" && !masterMemberId) throw new Error("サブIDの所有者を選択してください");
+      if (simulation) await api.updateSimulationMemberIdentity(member.id, nextName, idKind, snapshot.period);
+      else await api.updateMemberIdentity(member.id, nextName, idKind, idKind === "sub" ? masterMemberId : null);
+      setEditing(false); onUpdated(nextName, idKind);
+    }
     catch (reason) { setEditError(reason instanceof Error ? reason.message : "変更できませんでした"); }
     finally { setSaving(false); }
   };
   const rootIsFixed = member.id === rootMemberId;
   return <aside className={`panel member-detail${simulation ? " simulation-detail" : ""}`}><p className="eyebrow">{simulation ? "TRIAL MEMBER" : "MEMBER DETAIL"}</p><div className="member-name-heading"><h2>{member.displayName}{simulation && <em className="trial-tag">仮</em>}</h2><button className="text-button" onClick={() => setEditing((current) => !current)}>{editing ? "閉じる" : "名前・ID種別を編集"}</button></div>
-    {editing && <form className="rename-form identity-form" onSubmit={(event) => void saveIdentity(event)}><label>アプリ内表示名<input autoFocus value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label><label>ID種別<select value={idKind} disabled={rootIsFixed} onChange={(event) => setIdKind(event.target.value as IdKind)}><option value="master">マスターID</option><option value="sub">自分のサブID</option></select>{rootIsFixed && <small className="field-note">本人のルートIDはマスター固定です</small>}</label><button className="secondary-button" disabled={saving || !displayName.trim()}>{saving ? "保存中…" : "変更を保存"}</button>{editError && <p className="form-error">{editError}</p>}<p className="identity-note">サブIDへ変更すると本人のマスターIDに紐づき、報酬試算へ合算されます。公式サイトの登録は変更しません。</p></form>}
+    {editing && <form className="rename-form identity-form" onSubmit={(event) => void saveIdentity(event)}><label>アプリ内表示名<input autoFocus value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label><label>ID種別<select value={idKind} disabled={rootIsFixed} onChange={(event) => setIdKind(event.target.value as IdKind)}><option value="master">マスターID</option><option value="sub">サブID</option></select>{rootIsFixed && <small className="field-note">本人のルートIDはマスター固定です</small>}</label>{idKind === "sub" && !simulation && <label>サブIDの所有者<select value={masterMemberId} onChange={(event) => setMasterMemberId(event.target.value)}>{masterOptions.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select><small className="field-note">この所有者の収入へサブID分を合算します</small></label>}<button className="secondary-button" disabled={saving || !displayName.trim() || (!simulation && idKind === "sub" && !masterMemberId)}>{saving ? "保存中…" : "変更を保存"}</button>{editError && <p className="form-error">{editError}</p>}<p className="identity-note">{simulation ? "仮サブIDは本人のマスターIDへ紐づき、報酬試算へ合算されます。" : "サブIDは選んだ所有者のマスターIDへ紐づき、その所有者の収入へ合算されます。"}公式サイトの登録は変更しません。</p></form>}
     {simulation && <p className="trial-note">試算中だけ存在する仮メンバーです。初回・リピート相当を各1件として計算し、公式登録・実組織には反映されません。</p>}
-    <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>タイトル</dt><dd>{member.title}</dd></div><div><dt>ID種別</dt><dd>{member.idKind === "master" ? "マスター" : "サブ"}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div>{simulation && <div><dt>Aさん役</dt><dd>{TRAINER_ROLE_OPTIONS.find((option) => option.value === (member.trainerBonusRole ?? ""))?.label ?? "担当なし"}</dd></div>}</dl>
+    <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>タイトル</dt><dd>{member.title}</dd></div><div><dt>ID種別</dt><dd>{member.idKind === "master" ? "マスター" : `サブ（${owner?.displayName ?? "所有者未設定"}）`}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div>{simulation && <div><dt>Aさん役</dt><dd>{TRAINER_ROLE_OPTIONS.find((option) => option.value === (member.trainerBonusRole ?? ""))?.label ?? "担当なし"}</dd></div>}</dl>
     <h3>購入履歴</h3>{purchases.length ? purchases.map((purchase) => <div className="history-row" key={purchase.id}><span>{purchase.period} · {purchase.kind}</span><strong>{number.format(purchase.pv)} p.v.</strong></div>) : <p className="muted">履歴はありません</p>}
   </aside>;
 }
@@ -324,6 +334,8 @@ function Simulator() {
   const ownedSubIds = snapshot?.members.filter((member) => member.idKind === "sub" && member.masterMemberId === rootMember?.id && (member.endedPeriod === null || member.endedPeriod > snapshot.period)) ?? [];
   const partnerOptions = snapshot?.members.filter((member) => member.id !== rootMember?.id && member.idKind === "master" && member.masterMemberId === null && (member.endedPeriod === null || member.endedPeriod > snapshot.period) && !member.id.startsWith("trial-")) ?? [];
   const selectedPartnerId = partnerMemberId || partnerOptions[0]?.id || "";
+  const selectedPartner = partnerOptions.find((member) => member.id === selectedPartnerId) ?? null;
+  const partnerOwnedSubIds = snapshot?.members.filter((member) => member.idKind === "sub" && member.masterMemberId === selectedPartner?.id && (member.endedPeriod === null || member.endedPeriod > snapshot.period)) ?? [];
   const storyStartingOptions = snapshot?.members.filter((member) => member.endedPeriod === null || member.endedPeriod > snapshot.period) ?? [];
   const selectedStartingMemberId = startingMemberId || rootMember?.id || "";
   const hasResults = storyResult !== null || batchResult !== null || results.length > 0;
@@ -418,11 +430,12 @@ function Simulator() {
         {pattern === "optimized" ? <label>Aさん役<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!trainerRoleAvailable(rootMember?.trainerCredential ?? "NONE", option.value)}>{option.label}</option>)}</select><small className="field-note">現在資格：{rootMember?.trainerCredential === "NONE" ? "未取得" : rootMember?.trainerCredential}</small></label> : <div className="story-condition"><span>一時ボーナス</span><strong>含めない</strong><small>8段到達時の継続報酬を試算します</small></div>}
       </section>
 
-      <header className="simulator-workflow-heading"><div><span>3</span><div><strong>収入の集計範囲</strong><small>本人のサブIDは自動合算し、必要ならパートナーも加えます</small></div></div></header>
+      <header className="simulator-workflow-heading"><div><span>3</span><div><strong>収入の集計範囲</strong><small>本人とパートナーそれぞれの保有サブIDを自動合算できます</small></div></div></header>
       <section className="simulator-step-grid simulator-income-settings">
-        <label>収入の見方<select value={incomeMode} onChange={(event) => { setIncomeMode(event.target.value as "self" | "pair"); clearResults(); }}><option value="self">自分＋保有サブID</option><option value="pair">自分＋保有サブID＋パートナー</option></select></label>
-        {incomeMode === "pair" && <label>合算するパートナー<select value={selectedPartnerId} disabled={!partnerOptions.length} onChange={(event) => { setPartnerMemberId(event.target.value); clearResults(); }}>{partnerOptions.length ? partnerOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}（{member.course}）</option>) : <option value="">対象メンバーがいません</option>}</select><small className="field-note">本人側はサブIDをまとめて計算し、パートナーとは個別計算後に合算</small></label>}
+        <label>収入の見方<select value={incomeMode} onChange={(event) => { setIncomeMode(event.target.value as "self" | "pair"); clearResults(); }}><option value="self">自分＋自分のサブID</option><option value="pair">自分＋パートナー＋双方のサブID</option></select></label>
+        {incomeMode === "pair" && <label>合算するパートナー<select value={selectedPartnerId} disabled={!partnerOptions.length} onChange={(event) => { setPartnerMemberId(event.target.value); clearResults(); }}>{partnerOptions.length ? partnerOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}（{member.course}）</option>) : <option value="">対象メンバーがいません</option>}</select><small className="field-note">本人とパートナーの保有IDをそれぞれ計算した後に合算</small></label>}
         <div className="income-includes"><span>本人収入へ合算するID</span><strong>{rootMember?.displayName ?? "本人"}（メイン）</strong>{ownedSubIds.length ? ownedSubIds.map((member) => <small key={member.id}>{member.displayName}（{member.course}・サブ）</small>) : <small>登録済みサブIDなし</small>}<em>同じサブIDを別枠で足さないため、二重計上しません</em></div>
+        {incomeMode === "pair" && <div className="income-includes"><span>パートナー収入へ合算するID</span><strong>{selectedPartner?.displayName ?? "パートナー"}（メイン）</strong>{partnerOwnedSubIds.length ? partnerOwnedSubIds.map((member) => <small key={member.id}>{member.displayName}（{member.course}・サブ）</small>) : <small>登録済みサブIDなし</small>}<em>パートナーのサブID分もパートナー収入へ合算します</em></div>}
       </section>
 
       <footer className="simulator-submit"><div><strong>{pattern === "three-by-three" ? "3人ずつ増える未来を8段まで試算" : pattern === "one-by-one" ? "1人ずつつながる未来を8段まで試算" : candidateCount === 1 ? "1人の配置候補を比較" : `${candidateCount}人を順番に効率配置`}</strong><small>{pattern === "optimized" ? "計算しただけでは試算組織へ保存されません" : "遠い未来の条件付き試算として表示し、組織へは保存しません"}</small></div><button className="primary-button" disabled={busy || (incomeMode === "pair" && !selectedPartnerId) || (pattern !== "optimized" && !selectedStartingMemberId)}>{busy ? "全配置を計算中…" : pattern === "optimized" ? "配置を計算する" : "8段の未来を計算する"}</button></footer>
@@ -467,9 +480,9 @@ function PairIncomeBreakdown({ comparison, focus = "registration" }: { compariso
   if (focus === "line") {
     const before = owners.reduce((sum, owner) => sum + owner.before.line, 0);
     const after = owners.reduce((sum, owner) => sum + owner.after.line, 0);
-    return <section className="pair-income"><div className="pair-income-heading"><strong>本人の保有ID＋パートナーのラインボーナス</strong><small>一時ボーナスを除外</small></div>{owners.map((owner) => <div className="pair-income-row" key={owner.memberId}><div><strong>{owner.memberName}</strong><IncomeIdList owner={owner} /><small>ライン {yen.format(owner.before.line)} → {yen.format(owner.after.line)}</small></div><b className={owner.delta.line >= 0 ? "positive" : "negative"}>{owner.delta.line >= 0 ? "+" : ""}{yen.format(owner.delta.line)}</b></div>)}<div className="pair-income-total"><div><strong>全ID合計</strong><small>ライン {yen.format(before)} → {yen.format(after)}</small></div><b className={after - before >= 0 ? "positive" : "negative"}>{after - before >= 0 ? "+" : ""}{yen.format(after - before)}</b></div></section>;
+    return <section className="pair-income"><div className="pair-income-heading"><strong>本人＋パートナー＋双方のサブIDのラインボーナス</strong><small>一時ボーナスを除外</small></div>{owners.map((owner) => <div className="pair-income-row" key={owner.memberId}><div><strong>{owner.memberName}</strong><IncomeIdList owner={owner} /><small>ライン {yen.format(owner.before.line)} → {yen.format(owner.after.line)}</small></div><b className={owner.delta.line >= 0 ? "positive" : "negative"}>{owner.delta.line >= 0 ? "+" : ""}{yen.format(owner.delta.line)}</b></div>)}<div className="pair-income-total"><div><strong>全ID合計</strong><small>ライン {yen.format(before)} → {yen.format(after)}</small></div><b className={after - before >= 0 ? "positive" : "negative"}>{after - before >= 0 ? "+" : ""}{yen.format(after - before)}</b></div></section>;
   }
-  return <section className="pair-income"><div className="pair-income-heading"><strong>本人の保有ID＋パートナーの収入内訳</strong><small>本人のサブIDはまとめ、パートナーとは個別計算後に合算</small></div>{owners.map((owner) => <div className="pair-income-row" key={owner.memberId}><div><strong>{owner.memberName}</strong><IncomeIdList owner={owner} /><small>総ボーナス {yen.format(owner.before.gross)} → {yen.format(owner.after.gross)}</small><small>概算振込 {yen.format(owner.before.estimatedNet)} → {yen.format(owner.after.estimatedNet)}</small></div><b className={owner.delta.gross >= 0 ? "positive" : "negative"}>{owner.delta.gross >= 0 ? "+" : ""}{yen.format(owner.delta.gross)}</b></div>)}<div className="pair-income-total"><div><strong>全ID合計</strong><small>総ボーナス {yen.format(comparison.combined.beforeGross)} → {yen.format(comparison.combined.afterGross)}</small><small>概算振込 {yen.format(comparison.combined.beforeEstimatedNet)} → {yen.format(comparison.combined.afterEstimatedNet)}</small></div><b className={comparison.combined.grossDelta >= 0 ? "positive" : "negative"}>{comparison.combined.grossDelta >= 0 ? "+" : ""}{yen.format(comparison.combined.grossDelta)}</b></div></section>;
+  return <section className="pair-income"><div className="pair-income-heading"><strong>本人＋パートナー＋双方のサブIDの収入内訳</strong><small>両者のサブIDをそれぞれ合算後、本人とパートナーを合計</small></div>{owners.map((owner) => <div className="pair-income-row" key={owner.memberId}><div><strong>{owner.memberName}</strong><IncomeIdList owner={owner} /><small>総ボーナス {yen.format(owner.before.gross)} → {yen.format(owner.after.gross)}</small><small>概算振込 {yen.format(owner.before.estimatedNet)} → {yen.format(owner.after.estimatedNet)}</small></div><b className={owner.delta.gross >= 0 ? "positive" : "negative"}>{owner.delta.gross >= 0 ? "+" : ""}{yen.format(owner.delta.gross)}</b></div>)}<div className="pair-income-total"><div><strong>全ID合計</strong><small>総ボーナス {yen.format(comparison.combined.beforeGross)} → {yen.format(comparison.combined.afterGross)}</small><small>概算振込 {yen.format(comparison.combined.beforeEstimatedNet)} → {yen.format(comparison.combined.afterEstimatedNet)}</small></div><b className={comparison.combined.grossDelta >= 0 ? "positive" : "negative"}>{comparison.combined.grossDelta >= 0 ? "+" : ""}{yen.format(comparison.combined.grossDelta)}</b></div></section>;
 }
 
 function BonusBreakdownDetails({ result }: { result: PlacementResult }) {

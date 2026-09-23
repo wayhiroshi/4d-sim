@@ -605,6 +605,8 @@ const emptyPlacementBonusDelta = (): PlacementBonusDelta => ({
   oneTime: 0, recurring: 0, gross: 0, estimatedNet: 0
 });
 
+const PAIR_INCOME_WARNING = "本人とパートナーは、それぞれの保有サブIDを合算してから税・控除条件を個別に適用し、2名分を合計しています。実際の条件が異なる場合は総ボーナスを基準に確認してください";
+
 function placementIncomeComparison(
   mode: "self" | "pair",
   self: Member,
@@ -843,7 +845,7 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
       reasons,
       warnings: [
         "参考シミュレーションです。登録後の配置は公式サイトで確認してください",
-        ...(incomeMode === "pair" ? ["2名の概算振込額には同じ税・控除条件を個別に適用してから合算しています。実際の条件が異なる場合は総ボーナスを基準に確認してください"] : []),
+        ...(incomeMode === "pair" ? [PAIR_INCOME_WARNING] : []),
         ...(request.idKind === "sub" ? ["自分のサブIDとして、そのIDで発生するボーナスをメインIDの収入へ合算しています。不要なサブID登録は行わないでください"] : []),
         ...(request.trainerBonusRole && !trainerRoleEligible(root, request.trainerBonusRole) ? ["現在登録されているトレーナー資格では、このトレーナーボーナスは加算されません"] : []),
         ...(request.trainerBonusRole ? ["Aさん役の報酬は、該当トレーナー資格を有し申請書へ記載される場合の初回購入時のみです"] : []),
@@ -936,6 +938,7 @@ export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request:
     warnings: [
       "各1名を追加するたびに全配置候補を再計算する逐次最適配置です。全組合せの絶対的な最適解を保証するものではありません",
       "参考シミュレーションです。公式登録や現在の試算組織は、この計算だけでは変更されません",
+      ...(incomeMode === "pair" ? [PAIR_INCOME_WARNING] : []),
       ...(placedCount < request.candidateCount ? [`配置上限またはサブID上限により${request.candidateCount - placedCount}人は配置できませんでした`] : [])
     ]
   };
@@ -1084,7 +1087,8 @@ export function simulateGrowthStory(
       "初回登録時のスタート・トレーナーボーナスは含めず、継続時の報酬とラインボーナスを表示します",
       "実際の紹介速度、継続率、収入を予測または保証するものではありません",
       "追加メンバー自身の将来タイトルや資格取得は仮定せず、現在の公式条件で本人のタイトルだけを判定します",
-      "大人数は公式ルールに必要な人数と、各段のp.v.合計に圧縮して計算しています。試算組織へは保存されません"
+      "大人数は公式ルールに必要な人数と、各段のp.v.合計に圧縮して計算しています。試算組織へは保存されません",
+      ...(incomeMode === "pair" ? [PAIR_INCOME_WARNING] : [])
     ]
   };
 }
