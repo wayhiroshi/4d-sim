@@ -612,11 +612,14 @@ function placementIncomeComparison(
   selfAfter: BonusBreakdown,
   partner: Member | null,
   partnerBefore: BonusBreakdown | null,
-  partnerAfter: BonusBreakdown | null
+  partnerAfter: BonusBreakdown | null,
+  selfIncludedIds: Member[],
+  partnerIncludedIds: Member[]
 ): PlacementIncomeComparison {
   const selfOwner = {
     memberId: self.id,
     memberName: self.displayName,
+    includedIds: selfIncludedIds.map((member) => ({ memberId: member.id, memberName: member.displayName, idKind: member.idKind })),
     before: selfBefore,
     after: selfAfter,
     delta: compareBonusBreakdowns(selfBefore, selfAfter)
@@ -624,6 +627,7 @@ function placementIncomeComparison(
   const partnerOwner = partner && partnerBefore && partnerAfter ? {
     memberId: partner.id,
     memberName: partner.displayName,
+    includedIds: partnerIncludedIds.map((member) => ({ memberId: member.id, memberName: member.displayName, idKind: member.idKind })),
     before: partnerBefore,
     after: partnerAfter,
     delta: compareBonusBreakdowns(partnerBefore, partnerAfter)
@@ -779,7 +783,8 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
   const beforeBonus = computeBonus(snapshot, root.id, request.taxProfile);
   const beforePartnerBonus = partner ? computeBonus(snapshot, partner.id, request.taxProfile) : null;
   const beforeIncomeComparison = placementIncomeComparison(
-    incomeMode, root, beforeBonus, beforeBonus, partner, beforePartnerBonus, beforePartnerBonus
+    incomeMode, root, beforeBonus, beforeBonus, partner, beforePartnerBonus, beforePartnerBonus,
+    ownedIds(snapshot, root.id), partner ? ownedIds(snapshot, partner.id) : []
   );
   const ownedIdCountBefore = ownedIds(snapshot, root.id).length;
   const subIdLimitReached = request.idKind === "sub" && ownedIdCountBefore - 1 >= planConfig.maxSubIdsPerMaster;
@@ -809,7 +814,8 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
     const afterPartnerBonus = partner ? computeBonus(simulated, partner.id, request.taxProfile) : null;
     const bonusDelta = compareBonusBreakdowns(beforeBonus, afterBonus);
     const incomeComparison = placementIncomeComparison(
-      incomeMode, root, beforeBonus, afterBonus, partner, beforePartnerBonus, afterPartnerBonus
+      incomeMode, root, beforeBonus, afterBonus, partner, beforePartnerBonus, afterPartnerBonus,
+      ownedIds(simulated, root.id), partner ? ownedIds(simulated, partner.id) : []
     );
     const reasons = [
       `次タイトルの未達条件が${missingCount(beforeTitle)}件から${missingCount(afterTitle)}件になります`,
@@ -909,7 +915,8 @@ export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request:
   const finalBonus = computeBonus(working, root.id, request.taxProfile);
   const finalPartnerBonus = partner ? computeBonus(working, partner.id, request.taxProfile) : null;
   const incomeComparison = placementIncomeComparison(
-    incomeMode, root, initialBonus, finalBonus, partner, initialPartnerBonus, finalPartnerBonus
+    incomeMode, root, initialBonus, finalBonus, partner, initialPartnerBonus, finalPartnerBonus,
+    ownedIds(working, root.id), partner ? ownedIds(working, partner.id) : []
   );
   const placedCount = steps.length;
   return {
@@ -1044,7 +1051,8 @@ export function simulateGrowthStory(
   const finalBonus = computeBonus(working, root.id, request.taxProfile);
   const finalPartnerBonus = partner ? computeBonus(working, partner.id, request.taxProfile) : null;
   const incomeComparison = placementIncomeComparison(
-    incomeMode, root, initialBonus, finalBonus, partner, initialPartnerBonus, finalPartnerBonus
+    incomeMode, root, initialBonus, finalBonus, partner, initialPartnerBonus, finalPartnerBonus,
+    ownedIds(working, root.id), partner ? ownedIds(working, partner.id) : []
   );
   let cumulativeMemberCount = 0;
   let cumulativePv = 0;

@@ -336,6 +336,11 @@ export interface PlacementBonusDelta {
 export interface PlacementIncomeOwner {
   memberId: string;
   memberName: string;
+  includedIds: Array<{
+    memberId: string;
+    memberName: string;
+    idKind: IdKind;
+  }>;
   before: BonusBreakdown;
   after: BonusBreakdown;
   delta: PlacementBonusDelta;
