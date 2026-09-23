@@ -14,6 +14,7 @@ import {
   runForecast,
   simulateBatchPlacements,
   simulateGrowthStory,
+  simulateLeaderTeam,
   simulatePlacements
 } from "./engine";
 import type { CourseCode, ForecastScenario, Member, OrganizationSnapshot, PurchaseEvent, SimulationMember, TaxProfile } from "../shared/types";
@@ -509,6 +510,44 @@ describe("batch placement simulation", () => {
     const result = simulateBatchPlacements(data, { ...request, candidateCount: 10, idKind: "sub" });
     expect(result).toMatchObject({ requestedCount: 10, placedCount: 5, unplacedCount: 5, ownedIdCountBefore: 1, ownedIdCountAfter: 6 });
     expect(result.warnings.some((warning) => warning.includes("5人は配置できませんでした"))).toBe(true);
+  });
+});
+
+describe("leader team simulation", () => {
+  const request = {
+    candidateName: "爆発チーム",
+    course: "A" as const,
+    idKind: "master" as const,
+    period,
+    targetTitle: "LD" as const,
+    incomeMode: "self" as const,
+    partnerMemberId: null,
+    trainerBonusRole: null,
+    taxProfile: tax
+  };
+
+  it("リーダーの下に7名、その次の段に3名を固定して11名を試算する", () => {
+    const data = snapshot([member("root", null, "G")], [purchase("root", "root", 10670)]);
+    const original = structuredClone(data);
+    const result = simulateLeaderTeam(data, request);
+    const leader = result.steps[0]!;
+    const directMembers = result.steps.slice(1, 8);
+    const secondLineMembers = result.steps.slice(8);
+
+    expect(result).toMatchObject({ strategy: "leader-team", requestedCount: 11, placedCount: 11, unplacedCount: 0 });
+    expect(leader).toMatchObject({ candidateName: "爆発チームリーダー", placementMemberId: "root", priorityMemberId: "root" });
+    expect(directMembers).toHaveLength(7);
+    expect(directMembers.every((step) => step.placementMemberId === leader.candidateMemberId)).toBe(true);
+    expect(directMembers.every((step) => step.priorityMemberId === leader.candidateMemberId)).toBe(true);
+    expect(secondLineMembers.map((step) => step.placementMemberId)).toEqual(directMembers.slice(0, 3).map((step) => step.candidateMemberId));
+    expect(secondLineMembers.every((step) => step.priorityMemberId === leader.candidateMemberId)).toBe(true);
+    expect(result.leaderTitleAfter).toBe("LD");
+    expect(data).toEqual(original);
+  });
+
+  it("同じ入力で同じ配置と金額を返す", () => {
+    const data = snapshot([member("root", null, "G")], [purchase("root", "root", 10670)]);
+    expect(simulateLeaderTeam(data, request)).toEqual(simulateLeaderTeam(data, request));
   });
 });
 

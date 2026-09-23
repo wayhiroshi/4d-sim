@@ -177,11 +177,12 @@ export async function updateMemberIdentity(
   displayName: string,
   idKind: Member["idKind"],
   masterMemberId: string | null,
-  introducerMemberId: string | null
+  introducerMemberId: string | null,
+  parentMemberId: string | null
 ): Promise<number> {
   const result = await db.prepare(
-    "UPDATE members SET display_name = ?, id_kind = ?, master_member_id = ?, introducer_member_id = ?, updated_at = CURRENT_TIMESTAMP WHERE workspace_id = ? AND id = ?"
-  ).bind(displayName, idKind, masterMemberId, introducerMemberId, workspaceId, id).run();
+    "UPDATE members SET display_name = ?, id_kind = ?, master_member_id = ?, introducer_member_id = ?, parent_member_id = ?, updated_at = CURRENT_TIMESTAMP WHERE workspace_id = ? AND id = ?"
+  ).bind(displayName, idKind, masterMemberId, introducerMemberId, parentMemberId, workspaceId, id).run();
   return result.meta.changes;
 }
 
@@ -225,11 +226,19 @@ export async function updateSimulationMemberIdentity(
   displayName: string,
   idKind: SimulationMember["idKind"],
   masterMemberId: string | null,
-  introducerMemberId: string
+  introducerMemberId: string,
+  parentMemberId: string
 ): Promise<number> {
   const result = await db.prepare(
-    "UPDATE simulation_members SET display_name = ?, id_kind = ?, master_member_id = ?, introducer_member_id = ? WHERE workspace_id = ? AND id = ?"
-  ).bind(displayName, idKind, masterMemberId, introducerMemberId, workspaceId, id).run();
+    "UPDATE simulation_members SET display_name = ?, id_kind = ?, master_member_id = ?, introducer_member_id = ?, parent_member_id = ? WHERE workspace_id = ? AND id = ?"
+  ).bind(displayName, idKind, masterMemberId, introducerMemberId, parentMemberId, workspaceId, id).run();
+  return result.meta.changes;
+}
+
+export async function deleteSimulationMember(db: D1Database, workspaceId: string, id: string, period: string): Promise<number> {
+  const result = await db.prepare(
+    "DELETE FROM simulation_members WHERE workspace_id = ? AND id = ? AND period = ?"
+  ).bind(workspaceId, id, period).run();
   return result.meta.changes;
 }
 

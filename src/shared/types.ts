@@ -316,6 +316,8 @@ export interface BatchSimulationRequest extends SimulationRequest {
   candidateCount: number;
 }
 
+export type LeaderTeamSimulationRequest = SimulationRequest;
+
 export type GrowthStoryKind = "three-by-three" | "one-by-one";
 
 export interface GrowthStorySimulationRequest extends SimulationRequest {
@@ -427,6 +429,16 @@ export interface BatchSimulationResult {
   bonusDelta: PlacementBonusDelta;
   incomeComparison: PlacementIncomeComparison;
   warnings: string[];
+}
+
+export interface LeaderTeamSimulationResult extends Omit<BatchSimulationResult, "strategy"> {
+  strategy: "leader-team";
+  leaderMemberId: string;
+  leaderName: string;
+  leaderPlacementMemberId: string;
+  leaderPlacementMemberName: string;
+  leaderTitleAfter: TitleCode;
+  leaderDrMissingAfter: number;
 }
 
 export interface GrowthStoryGeneration {

@@ -10,6 +10,8 @@ import {
   type ForecastScenario,
   type GrowthStorySimulationRequest,
   type GrowthStorySimulationResult,
+  type LeaderTeamSimulationRequest,
+  type LeaderTeamSimulationResult,
   type Member,
   type Mission,
   type OrganizationSnapshot,
@@ -1042,6 +1044,156 @@ export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request:
       "参考シミュレーションです。公式登録や現在の試算組織は、この計算だけでは変更されません",
       ...(incomeMode === "pair" ? [PAIR_INCOME_WARNING] : []),
       ...(placedCount < request.candidateCount ? [`配置上限またはサブID上限により${request.candidateCount - placedCount}人は配置できませんでした`] : [])
+    ]
+  };
+}
+
+function unusedSimulationSuffix(snapshot: OrganizationSnapshot, preferred: string): string {
+  let suffix = preferred;
+  let collision = 1;
+  while (snapshot.members.some((member) => member.id === `simulation-${suffix}`)) {
+    suffix = `${preferred}-${collision}`;
+    collision += 1;
+  }
+  return suffix;
+}
+
+export function simulateLeaderTeam(
+  snapshot: OrganizationSnapshot,
+  request: LeaderTeamSimulationRequest
+): LeaderTeamSimulationResult {
+  const root = snapshot.members.find((member) => member.parentMemberId === null);
+  if (!root) throw new Error("Root member is required");
+  const incomeMode = request.incomeMode ?? "self";
+  const partner = incomeMode === "pair"
+    ? snapshot.members.find((member) => member.id === request.partnerMemberId) ?? null
+    : null;
+  if (incomeMode === "pair" && (!partner || partner.id === root.id || partner.idKind !== "master" || partner.masterMemberId !== null || !activeInPeriod(partner, snapshot.period))) {
+    throw new Error("An active partner master ID is required for pair income simulation");
+  }
+
+  const leaderName = `${request.candidateName}リーダー`;
+  const leaderRequest: SimulationRequest = { ...request, candidateName: leaderName, idKind: "master" };
+  const leaderPlacement = simulatePlacements(snapshot, leaderRequest).find((result) => result.eligible);
+  if (!leaderPlacement) throw new Error("リーダーを配置できるアップがありません");
+
+  const priorityId = leaderPlacement.priorityMemberId;
+  const initialTarget = titleTargetState(snapshot, priorityId, request.targetTitle);
+  const initialBonus = computeBonus(snapshot, root.id, request.taxProfile);
+  const initialPartnerBonus = partner ? computeBonus(snapshot, partner.id, request.taxProfile) : null;
+  const ownedIdCountBefore = ownedIds(snapshot, root.id).length;
+  let working = snapshot;
+  const steps: LeaderTeamSimulationResult["steps"] = [];
+
+  const addTeamMember = (
+    candidateName: string,
+    placementMemberId: string,
+    introducerMemberId: string,
+    preferredSuffix: string,
+    trainerBonusRole: TrainerBonusRole | null
+  ): string => {
+    const suffix = unusedSimulationSuffix(working, preferredSuffix);
+    const candidateMemberId = `simulation-${suffix}`;
+    const beforeTarget = titleTargetState(working, priorityId, request.targetTitle);
+    const beforeBonus = computeBonus(working, root.id, request.taxProfile);
+    const beforePartnerBonus = partner ? computeBonus(working, partner.id, request.taxProfile) : null;
+    const memberRequest: SimulationRequest = {
+      ...request,
+      candidateName,
+      idKind: "master",
+      trainerBonusRole
+    };
+    working = cloneWithCandidate(working, memberRequest, placementMemberId, suffix, introducerMemberId);
+    const afterTarget = titleTargetState(working, priorityId, request.targetTitle);
+    const afterBonus = computeBonus(working, root.id, request.taxProfile);
+    const afterPartnerBonus = partner ? computeBonus(working, partner.id, request.taxProfile) : null;
+    const comparison = placementIncomeComparison(
+      incomeMode, root, beforeBonus, afterBonus, partner, beforePartnerBonus, afterPartnerBonus,
+      ownedIds(working, root.id), partner ? ownedIds(working, partner.id) : []
+    );
+    const placement = working.members.find((member) => member.id === placementMemberId);
+    steps.push({
+      sequence: steps.length + 1,
+      candidateMemberId,
+      candidateName,
+      placementMemberId,
+      placementMemberName: placement?.displayName ?? leaderPlacement.placementMemberName,
+      priorityMemberId: introducerMemberId,
+      priorityMemberName: working.members.find((member) => member.id === introducerMemberId)?.displayName ?? leaderPlacement.priorityMemberName,
+      priorityMemberRole: leaderPlacement.priorityMemberRole,
+      titleBefore: beforeTarget.evaluation.achievedTitle,
+      titleAfter: afterTarget.evaluation.achievedTitle,
+      missingBefore: beforeTarget.missing,
+      missingAfter: afterTarget.missing,
+      grossDelta: comparison.combined.grossDelta,
+      lineDelta: comparison.self.delta.line + (comparison.partner?.delta.line ?? 0),
+      estimatedNetDelta: comparison.combined.estimatedNetDelta
+    });
+    return candidateMemberId;
+  };
+
+  const leaderMemberId = addTeamMember(
+    leaderName,
+    leaderPlacement.placementMemberId,
+    priorityId,
+    "leader-team-leader",
+    request.trainerBonusRole ?? null
+  );
+  const directMemberIds: string[] = [];
+  for (let index = 0; index < 10; index += 1) {
+    const placementMemberId = index < planConfig.firstLineLimit
+      ? leaderMemberId
+      : directMemberIds[index - planConfig.firstLineLimit]!;
+    const memberId = addTeamMember(
+      `${request.candidateName}チーム${index + 1}`,
+      placementMemberId,
+      leaderMemberId,
+      `leader-team-member-${index + 1}`,
+      null
+    );
+    if (index < planConfig.firstLineLimit) directMemberIds.push(memberId);
+  }
+
+  const finalTarget = titleTargetState(working, priorityId, request.targetTitle);
+  const leaderDr = titleTargetState(working, leaderMemberId, "DR");
+  const finalBonus = computeBonus(working, root.id, request.taxProfile);
+  const finalPartnerBonus = partner ? computeBonus(working, partner.id, request.taxProfile) : null;
+  const incomeComparison = placementIncomeComparison(
+    incomeMode, root, initialBonus, finalBonus, partner, initialPartnerBonus, finalPartnerBonus,
+    ownedIds(working, root.id), partner ? ownedIds(working, partner.id) : []
+  );
+  return {
+    strategy: "leader-team",
+    requestedCount: 11,
+    placedCount: steps.length,
+    unplacedCount: 11 - steps.length,
+    steps,
+    priorityMemberId: priorityId,
+    priorityMemberName: leaderPlacement.priorityMemberName,
+    priorityMemberRole: leaderPlacement.priorityMemberRole,
+    targetTitle: request.targetTitle,
+    targetAchievedBefore: initialTarget.reached,
+    targetAchievedAfter: finalTarget.reached,
+    titleBefore: initialTarget.evaluation.achievedTitle,
+    titleAfter: finalTarget.evaluation.achievedTitle,
+    missingBefore: initialTarget.missing,
+    missingAfter: finalTarget.missing,
+    ownedIdCountBefore,
+    ownedIdCountAfter: ownedIds(working, root.id).length,
+    bonusDelta: compareBonusBreakdowns(initialBonus, finalBonus),
+    incomeComparison,
+    leaderMemberId,
+    leaderName,
+    leaderPlacementMemberId: leaderPlacement.placementMemberId,
+    leaderPlacementMemberName: leaderPlacement.placementMemberName,
+    leaderTitleAfter: leaderDr.evaluation.achievedTitle,
+    leaderDrMissingAfter: leaderDr.missing,
+    warnings: [
+      `11名を1つのチームとして扱い、${leaderName}単体の配置候補を全組織から比較した最上位にチームを固定しています`,
+      `10名の紹介者は${leaderName}で固定し、1次ライン7名、2次ライン3名で配置しています`,
+      "10名分のトレーナーボーナスは含めず、リーダー1名分だけ選択中のAさん役を反映します",
+      "参考シミュレーションです。計算しただけでは試算組織へ保存されません",
+      ...(incomeMode === "pair" ? [PAIR_INCOME_WARNING] : [])
     ]
   };
 }

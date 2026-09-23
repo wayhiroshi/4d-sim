@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
 import { api } from "./api";
+import { descendantMemberIds } from "./domain/placement";
 import {
   COURSES,
   TITLE_ORDER,
@@ -12,6 +13,7 @@ import {
   type GrowthStoryKind,
   type GrowthStorySimulationResult,
   type IdKind,
+  type LeaderTeamSimulationResult,
   type Member,
   type OrganizationSnapshot,
   type PlacementResult,
@@ -196,6 +198,7 @@ function Organization() {
         parentMemberId: String(values.get("parent")),
         period: snapshot.period,
         idKind: trialIdKind,
+        masterMemberId: trialIdKind === "sub" ? String(values.get("subOwner") || rootMember?.id || "") : null,
         trainerBonusRole: String(values.get("trainerRole")) as TrainerBonusRole || null
       });
       form.reset(); setTrialIdKind("master");
@@ -220,7 +223,7 @@ function Organization() {
       <label>コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label>
       <label>配置先<select name="parent" defaultValue={rootMember?.id}>{actualMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>
       {manualIdKind === "master" && <label>紹介者<select name="introducer" defaultValue={rootMember?.id}>{actualMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>}
-      {manualIdKind === "sub" && <label>サブIDの所有者<select name="subOwner" defaultValue={rootMember?.id}>{actualMasterMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select><small className="field-note">本人またはパートナーのマスターIDを選択</small></label>}
+      {manualIdKind === "sub" && <label>サブIDの所有者<select name="subOwner" defaultValue={rootMember?.id}>{actualMasterMembers.map((member) => <option key={member.id} value={member.id}>{member.id === rootMember?.id ? `自分：${member.displayName}` : `パートナー：${member.displayName}`}</option>)}</select><small className="field-note">パートナーを選ぶと「パートナーサブ」として登録</small></label>}
       <button className="primary-button" disabled={busy || !rootMember}>{busy ? "追加中…" : "実組織へ追加"}</button>
       <p className="manual-member-note">この操作はNavigator内だけに保存され、フォーデイズ公式サイトの登録・配置は変更しません。</p>
     </form>
@@ -230,7 +233,8 @@ function Organization() {
     <form className="panel trial-form" onSubmit={(event) => void addTrial(event)}>
       <div><p className="eyebrow">MANUAL TRIAL</p><h2>仮メンバーを手動追加</h2></div>
       <label>試算上の名前<input name="name" required maxLength={80} placeholder={`仮メンバー${data.simulationMembers.length + 1}`} /></label>
-      <label>IDの扱い<select name="idKind" value={trialIdKind} onChange={(event) => setTrialIdKind(event.target.value as IdKind)}><option value="master">通常の新規会員</option><option value="sub">自分のサブID</option></select><small className="field-note">サブIDは通常5件まで。発生報酬は本人収入へ合算します</small></label>
+      <label>IDの扱い<select name="idKind" value={trialIdKind} onChange={(event) => setTrialIdKind(event.target.value as IdKind)}><option value="master">通常の新規会員</option><option value="sub">サブID（所有者を指定）</option></select><small className="field-note">サブIDは選んだ所有者の収入へ合算します</small></label>
+      {trialIdKind === "sub" && <label>サブIDの所有者<select name="subOwner" defaultValue={rootMember?.id}>{actualMasterMembers.map((member) => <option key={member.id} value={member.id}>{member.id === rootMember?.id ? `自分：${member.displayName}` : `パートナー：${member.displayName}`}</option>)}</select><small className="field-note">パートナーを選ぶと「パートナーサブ」として試算します</small></label>}
       <label>コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label>
       <label>配置先<select name="parent">{snapshot?.members.filter((member) => member.endedPeriod === null).map((member) => <option key={member.id} value={member.id}>{trialIds.has(member.id) ? "【仮】" : ""}{member.displayName}</option>)}</select></label>
       <label>Aさん役<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!trainerRoleAvailable(rootMember?.trainerCredential ?? "NONE", option.value)}>{option.label}</option>)}</select><small className="field-note">現在の登録資格：{!rootMember || rootMember.trainerCredential === "NONE" ? "未取得" : rootMember.trainerCredential}</small></label>
@@ -241,7 +245,7 @@ function Organization() {
       <section className="panel tree-panel">
         {snapshot?.members.filter((member) => member.parentMemberId === null).map((root) => <TreeNode key={root.id} member={root} snapshot={snapshot} simulationIds={trialIds} depth={0} selectedId={selected?.id ?? null} onSelect={setSelectedId} />)}
       </section>
-      {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} simulationIds={trialIds} rootMemberId={rootMember?.id ?? null} onUpdated={(displayName, idKind) => { setMessage(`「${displayName}」を${idKind === "sub" ? "サブID" : "マスターID"}として保存しました`); reload(); }} />}
+      {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} simulationIds={trialIds} rootMemberId={rootMember?.id ?? null} onUpdated={(displayName, idKind) => { setMessage(`「${displayName}」のアップと${idKind === "sub" ? "サブID所有者" : "ID種別"}を保存しました`); reload(); }} onDeleted={(displayName) => { setSelectedId(null); setMessage(`仮メンバー「${displayName}」を1件削除しました`); reload(); }} />}
     </div>
   </>}</PageState>;
 }
@@ -268,28 +272,41 @@ function TreeNode({ member, snapshot, simulationIds, depth, selectedId, onSelect
   </div>;
 }
 
-function MemberDetail({ member, snapshot, simulation = false, simulationIds, rootMemberId, onUpdated }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean; simulationIds: Set<string>; rootMemberId: string | null; onUpdated: (displayName: string, idKind: IdKind) => void }) {
+function MemberDetail({ member, snapshot, simulation = false, simulationIds, rootMemberId, onUpdated, onDeleted }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean; simulationIds: Set<string>; rootMemberId: string | null; onUpdated: (displayName: string, idKind: IdKind) => void; onDeleted: (displayName: string) => void }) {
   const purchases = snapshot.purchases.filter((purchase) => purchase.memberId === member.id).slice(-5).reverse();
-  const [editing, setEditing] = useState(false); const [displayName, setDisplayName] = useState(member.displayName); const [idKind, setIdKind] = useState<IdKind>(member.idKind); const [masterMemberId, setMasterMemberId] = useState(member.masterMemberId ?? rootMemberId ?? ""); const [saving, setSaving] = useState(false); const [editError, setEditError] = useState<string | null>(null);
-  useEffect(() => { setDisplayName(member.displayName); setIdKind(member.idKind); setMasterMemberId(member.masterMemberId ?? rootMemberId ?? ""); setEditing(false); setEditError(null); }, [member.id, member.displayName, member.idKind, member.masterMemberId, rootMemberId]);
+  const [editing, setEditing] = useState(false); const [displayName, setDisplayName] = useState(member.displayName); const [idKind, setIdKind] = useState<IdKind>(member.idKind); const [masterMemberId, setMasterMemberId] = useState(member.masterMemberId ?? rootMemberId ?? ""); const [parentMemberId, setParentMemberId] = useState(member.parentMemberId ?? ""); const [saving, setSaving] = useState(false); const [confirmingDelete, setConfirmingDelete] = useState(false); const [editError, setEditError] = useState<string | null>(null);
+  useEffect(() => { setDisplayName(member.displayName); setIdKind(member.idKind); setMasterMemberId(member.masterMemberId ?? rootMemberId ?? ""); setParentMemberId(member.parentMemberId ?? ""); setEditing(false); setConfirmingDelete(false); setEditError(null); }, [member.id, member.displayName, member.idKind, member.masterMemberId, member.parentMemberId, rootMemberId]);
   const masterOptions = snapshot.members.filter((item) => item.id !== member.id && item.idKind === "master" && item.masterMemberId === null && !simulationIds.has(item.id) && item.endedPeriod === null);
   const owner = snapshot.members.find((item) => item.id === member.masterMemberId) ?? null;
+  const descendants = descendantMemberIds(snapshot.members, member.id);
+  const parentOptions = snapshot.members.filter((item) => item.id !== member.id && !descendants.has(item.id) && item.endedPeriod === null && (simulation || !simulationIds.has(item.id)));
   const saveIdentity = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const nextName = displayName.trim(); if (!nextName) return; setSaving(true); setEditError(null);
     try {
-      if (!simulation && idKind === "sub" && !masterMemberId) throw new Error("サブIDの所有者を選択してください");
-      if (simulation) await api.updateSimulationMemberIdentity(member.id, nextName, idKind, snapshot.period);
-      else await api.updateMemberIdentity(member.id, nextName, idKind, idKind === "sub" ? masterMemberId : null);
+      if (idKind === "sub" && !masterMemberId) throw new Error("サブIDの所有者を選択してください");
+      if (!rootIsFixed && !parentMemberId) throw new Error("アップを選択してください");
+      if (simulation) await api.updateSimulationMemberIdentity(member.id, nextName, idKind, idKind === "sub" ? masterMemberId : null, parentMemberId, snapshot.period);
+      else await api.updateMemberIdentity(member.id, nextName, idKind, idKind === "sub" ? masterMemberId : null, rootIsFixed ? null : parentMemberId);
       setEditing(false); onUpdated(nextName, idKind);
     }
     catch (reason) { setEditError(reason instanceof Error ? reason.message : "変更できませんでした"); }
     finally { setSaving(false); }
   };
   const rootIsFixed = member.id === rootMemberId;
-  return <aside className={`panel member-detail${simulation ? " simulation-detail" : ""}`}><p className="eyebrow">{simulation ? "TRIAL MEMBER" : "MEMBER DETAIL"}</p><div className="member-name-heading"><h2>{member.displayName}{simulation && <em className="trial-tag">仮</em>}</h2><button className="text-button" onClick={() => setEditing((current) => !current)}>{editing ? "閉じる" : "名前・ID種別を編集"}</button></div>
-    {editing && <form className="rename-form identity-form" onSubmit={(event) => void saveIdentity(event)}><label>アプリ内表示名<input autoFocus value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label><label>ID種別<select value={idKind} disabled={rootIsFixed} onChange={(event) => setIdKind(event.target.value as IdKind)}><option value="master">マスターID</option><option value="sub">サブID</option></select>{rootIsFixed && <small className="field-note">本人のルートIDはマスター固定です</small>}</label>{idKind === "sub" && !simulation && <label>サブIDの所有者<select value={masterMemberId} onChange={(event) => setMasterMemberId(event.target.value)}>{masterOptions.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select><small className="field-note">この所有者の収入へサブID分を合算します</small></label>}<button className="secondary-button" disabled={saving || !displayName.trim() || (!simulation && idKind === "sub" && !masterMemberId)}>{saving ? "保存中…" : "変更を保存"}</button>{editError && <p className="form-error">{editError}</p>}<p className="identity-note">{simulation ? "仮サブIDは本人のマスターIDへ紐づき、報酬試算へ合算されます。" : "サブIDは選んだ所有者のマスターIDへ紐づき、その所有者の収入へ合算されます。"}公式サイトの登録は変更しません。</p></form>}
+  const idKindLabel = member.idKind === "master" ? "マスター" : member.masterMemberId === rootMemberId ? "自分のサブID" : `パートナーサブ（${owner?.displayName ?? "所有者未設定"}）`;
+  const deleteTrial = async () => {
+    setSaving(true); setEditError(null);
+    try { await api.deleteSimulationMember(member.id, snapshot.period); onDeleted(member.displayName); }
+    catch (reason) { setEditError(reason instanceof Error ? reason.message : "削除できませんでした"); setConfirmingDelete(false); }
+    finally { setSaving(false); }
+  };
+  return <aside className={`panel member-detail${simulation ? " simulation-detail" : ""}`}><p className="eyebrow">{simulation ? "TRIAL MEMBER" : "MEMBER DETAIL"}</p><div className="member-name-heading"><h2>{member.displayName}{simulation && <em className="trial-tag">仮</em>}</h2><button className="text-button" onClick={() => setEditing((current) => !current)}>{editing ? "閉じる" : "名前・ID・アップを編集"}</button></div>
+    {editing && <form className="rename-form identity-form" onSubmit={(event) => void saveIdentity(event)}><label>アプリ内表示名<input autoFocus value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label><label>ID種別<select value={idKind} disabled={rootIsFixed} onChange={(event) => setIdKind(event.target.value as IdKind)}><option value="master">マスターID</option><option value="sub">サブID（所有者を指定）</option></select>{rootIsFixed && <small className="field-note">本人のルートIDはマスター固定です</small>}</label>{idKind === "sub" && <label>サブIDの所有者<select value={masterMemberId} onChange={(event) => setMasterMemberId(event.target.value)}>{masterOptions.map((item) => <option key={item.id} value={item.id}>{item.id === rootMemberId ? `自分：${item.displayName}` : `パートナー：${item.displayName}`}</option>)}</select><small className="field-note">パートナーを選ぶとパートナーサブとして合算します</small></label>}{!rootIsFixed && <label>アップ（配置親）<select value={parentMemberId} onChange={(event) => setParentMemberId(event.target.value)}>{parentOptions.map((item) => <option key={item.id} value={item.id}>{simulationIds.has(item.id) ? "【仮】" : ""}{item.displayName}</option>)}</select><small className="field-note">配下がいる場合は、その枝ごと新しいアップの下へ移動します</small></label>}<button className="secondary-button" disabled={saving || !displayName.trim() || (idKind === "sub" && !masterMemberId) || (!rootIsFixed && !parentMemberId)}>{saving ? "保存中…" : "変更を保存"}</button>{editError && <p className="form-error">{editError}</p>}<p className="identity-note">サブIDは選んだ所有者の収入へ合算します。変更するのはNavigator内の試算データだけで、公式サイトの登録は変更しません。</p></form>}
     {simulation && <p className="trial-note">試算中だけ存在する仮メンバーです。初回・リピート相当を各1件として計算し、公式登録・実組織には反映されません。</p>}
-    <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>タイトル</dt><dd>{member.title}</dd></div><div><dt>ID種別</dt><dd>{member.idKind === "master" ? "マスター" : `サブ（${owner?.displayName ?? "所有者未設定"}）`}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div>{simulation && <div><dt>Aさん役</dt><dd>{TRAINER_ROLE_OPTIONS.find((option) => option.value === (member.trainerBonusRole ?? ""))?.label ?? "担当なし"}</dd></div>}</dl>
+    <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>タイトル</dt><dd>{member.title}</dd></div><div><dt>ID種別</dt><dd>{idKindLabel}</dd></div><div><dt>アップ</dt><dd>{snapshot.members.find((item) => item.id === member.parentMemberId)?.displayName ?? "ルート"}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div>{simulation && <div><dt>Aさん役</dt><dd>{TRAINER_ROLE_OPTIONS.find((option) => option.value === (member.trainerBonusRole ?? ""))?.label ?? "担当なし"}</dd></div>}</dl>
+    {simulation && !confirmingDelete && <button className="text-button danger-text member-delete" disabled={saving} onClick={() => setConfirmingDelete(true)}>この仮メンバーを1件削除</button>}
+    {simulation && confirmingDelete && <div className="member-delete-confirm" role="alert"><strong>「{member.displayName}」を削除しますか？</strong><small>配下がいる場合は、先にそのメンバーのアップを変更してください。</small><div><button className="text-button" disabled={saving} onClick={() => setConfirmingDelete(false)}>キャンセル</button><button className="danger-button" disabled={saving} onClick={() => void deleteTrial()}>{saving ? "削除中…" : "1件削除"}</button></div></div>}
+    {editError && !editing && <p className="form-error">{editError}</p>}
     <h3>購入履歴</h3>{purchases.length ? purchases.map((purchase) => <div className="history-row" key={purchase.id}><span>{purchase.period} · {purchase.kind}</span><strong>{number.format(purchase.pv)} p.v.</strong></div>) : <p className="muted">履歴はありません</p>}
   </aside>;
 }
@@ -305,7 +322,7 @@ function Products() {
 }
 
 type RewardFocus = "registration" | "line";
-type SimulatorPattern = "optimized" | GrowthStoryKind;
+type SimulatorPattern = "optimized" | "leader-team" | GrowthStoryKind;
 const priorityRoleLabel = (role: PlacementResult["priorityMemberRole"]): string => ({
   self: "自分",
   "self-sub": "自分のサブ",
@@ -321,7 +338,7 @@ function Simulator() {
   const tax = useLoad(api.tax, []);
   const goal = useLoad(api.goal, []);
   const [results, setResults] = useState<PlacementResult[]>([]);
-  const [batchResult, setBatchResult] = useState<BatchSimulationResult | null>(null);
+  const [batchResult, setBatchResult] = useState<BatchSimulationResult | LeaderTeamSimulationResult | null>(null);
   const [storyResult, setStoryResult] = useState<GrowthStorySimulationResult | null>(null);
   const [pattern, setPattern] = useState<SimulatorPattern>("optimized");
   const [candidateCount, setCandidateCount] = useState(1);
@@ -384,7 +401,10 @@ function Simulator() {
     };
     try {
       setCandidate(nextCandidate);
-      if (pattern !== "optimized") {
+      if (pattern === "leader-team") {
+        const response = await api.simulateLeaderTeam(request);
+        setBatchResult(response.result); setStoryResult(null); setResults([]);
+      } else if (pattern !== "optimized") {
         const response = await api.simulateGrowthStory({
           ...request,
           story: pattern,
@@ -418,8 +438,8 @@ function Simulator() {
     if (!candidate || !snapshot || !batchResult?.steps.length) return;
     setSavingBatch(true); setError(null);
     try {
-      await api.createSimulationMembers(batchResult.steps.map((step) => ({ tempId: step.candidateMemberId, displayName: step.candidateName, parentMemberId: step.placementMemberId, introducerMemberId: step.priorityMemberId, course: candidate.course, period: snapshot.period, idKind: candidate.idKind, trainerBonusRole: candidate.trainerBonusRole })));
-      setMessage(`${batchResult.placedCount}人を試算組織へ一括追加しました`);
+      await api.createSimulationMembers(batchResult.steps.map((step) => ({ tempId: step.candidateMemberId, displayName: step.candidateName, parentMemberId: step.placementMemberId, introducerMemberId: step.priorityMemberId, course: candidate.course, period: snapshot.period, idKind: candidate.idKind, trainerBonusRole: batchResult.strategy === "leader-team" && step.sequence > 1 ? null : candidate.trainerBonusRole })));
+      setMessage(batchResult.strategy === "leader-team" ? "11名を1つのチームとして試算組織へ追加しました" : `${batchResult.placedCount}人を試算組織へ一括追加しました`);
       setBatchResult(null); setCandidate(null); tree.reload();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "一括追加できませんでした"); }
     finally { setSavingBatch(false); }
@@ -433,18 +453,19 @@ function Simulator() {
       <header className="simulator-workflow-heading"><div><span>1</span><div><strong>試算のストーリー</strong><small>増え方の違いを同じ報酬ルールで比較します</small></div></div></header>
       <section className="simulator-patterns" role="group" aria-label="試算パターン">
         <button type="button" className={pattern === "optimized" ? "active" : ""} aria-pressed={pattern === "optimized"} onClick={() => { setPattern("optimized"); setRewardFocus("registration"); clearResults(); }}><strong>効率配置</strong><small>1〜20人を1人ずつ最適化</small><b>人数を自由に選ぶ</b></button>
+        <button type="button" className={pattern === "leader-team" ? "active" : ""} aria-pressed={pattern === "leader-team"} onClick={() => { setPattern("leader-team"); setRewardFocus("registration"); clearResults(); }}><strong>リーダー＋10名</strong><small>11名を1つのチームで配置</small><b>7名＋次段3名</b></button>
         <button type="button" className={pattern === "three-by-three" ? "active" : ""} aria-pressed={pattern === "three-by-three"} onClick={() => { setPattern("three-by-three"); setRewardFocus("line"); clearResults(); }}><strong>理想型 3→3</strong><small>3人がそれぞれ3人を紹介</small><b>8段・累計9,840人</b></button>
         <button type="button" className={pattern === "one-by-one" ? "active" : ""} aria-pressed={pattern === "one-by-one"} onClick={() => { setPattern("one-by-one"); setRewardFocus("line"); clearResults(); }}><strong>現実型 1→1</strong><small>1人から次の1人へつなぐ</small><b>8段・累計8人</b></button>
       </section>
       <section className="simulator-step-grid simulator-basics">
-        {pattern === "optimized" ? <><div className="count-field"><span className="field-label">人数</span><div className="count-presets" role="group" aria-label="試算人数">{[1, 5, 10, 20].map((count) => <button type="button" className={candidateCount === count ? "active" : ""} aria-pressed={candidateCount === count} key={count} onClick={() => { setCandidateCount(count); clearResults(); }}>{count}人</button>)}</div><label className="custom-count">その他<input type="number" min="1" max="20" value={candidateCount} onChange={(event) => { setCandidateCount(Math.max(1, Math.min(20, Number(event.target.value) || 1))); clearResults(); }} /></label></div><label>{candidateCount === 1 ? "試算上の名前（任意）" : "名前の先頭（任意）"}<input name="name" maxLength={80} placeholder={candidateCount === 1 ? "空欄なら「試算」" : "空欄なら「試算1」〜"} /><small className="field-note">{candidateCount === 1 ? "空欄時は「試算」とします" : "空欄時は「試算1」から連番にします"}</small></label></> : <label className="span-2">ストーリーの起点<select value={selectedStartingMemberId} onChange={(event) => { setStartingMemberId(event.target.value); clearResults(); }}>{storyStartingOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}（{member.course}）</option>)}</select><small className="field-note">この人から紹介の連鎖を始めます</small></label>}
+        {pattern === "optimized" ? <><div className="count-field"><span className="field-label">人数</span><div className="count-presets" role="group" aria-label="試算人数">{[1, 5, 10, 20].map((count) => <button type="button" className={candidateCount === count ? "active" : ""} aria-pressed={candidateCount === count} key={count} onClick={() => { setCandidateCount(count); clearResults(); }}>{count}人</button>)}</div><label className="custom-count">その他<input type="number" min="1" max="20" value={candidateCount} onChange={(event) => { setCandidateCount(Math.max(1, Math.min(20, Number(event.target.value) || 1))); clearResults(); }} /></label></div><label>{candidateCount === 1 ? "試算上の名前（任意）" : "名前の先頭（任意）"}<input name="name" maxLength={80} placeholder={candidateCount === 1 ? "空欄なら「試算」" : "空欄なら「試算1」〜"} /><small className="field-note">{candidateCount === 1 ? "空欄時は「試算」とします" : "空欄時は「試算1」から連番にします"}</small></label></> : pattern === "leader-team" ? <label className="span-2">チーム名の先頭（任意）<input name="name" maxLength={60} placeholder="空欄なら「試算リーダー」と「試算チーム1〜10」" /><small className="field-note">リーダー1名と10名をまとめて名前付けします</small></label> : <label className="span-2">ストーリーの起点<select value={selectedStartingMemberId} onChange={(event) => { setStartingMemberId(event.target.value); clearResults(); }}>{storyStartingOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}（{member.course}）</option>)}</select><small className="field-note">この人から紹介の連鎖を始めます</small></label>}
       </section>
 
       <header className="simulator-workflow-heading"><div><span>2</span><div><strong>登録条件</strong><small>全員を同じ条件で計算します</small></div></div></header>
       <section className="simulator-step-grid simulator-conditions">
         <label>希望コース<select name="course">{COURSES.map((course) => <option key={course}>{course}</option>)}</select></label>
-        {pattern === "optimized" ? <label>IDの扱い<select name="idKind" defaultValue="master"><option value="master">通常の新規会員</option><option value="sub">自分のサブID</option></select><small className="field-note">サブIDの報酬は本人へ合算</small></label> : <div className="story-condition"><span>IDの扱い</span><strong>通常の新規会員</strong><small>紹介の連鎖のため、サブIDは使いません</small></div>}
-        {pattern === "optimized" ? <label>Aさん役<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!trainerRoleAvailable(rootMember?.trainerCredential ?? "NONE", option.value)}>{option.label}</option>)}</select><small className="field-note">現在資格：{rootMember?.trainerCredential === "NONE" ? "未取得" : rootMember?.trainerCredential}</small></label> : <div className="story-condition"><span>一時ボーナス</span><strong>含めない</strong><small>8段到達時の継続報酬を試算します</small></div>}
+        {pattern === "optimized" ? <label>IDの扱い<select name="idKind" defaultValue="master"><option value="master">通常の新規会員</option><option value="sub">自分のサブID</option></select><small className="field-note">サブIDの報酬は本人へ合算</small></label> : <div className="story-condition"><span>IDの扱い</span><strong>通常の新規会員</strong><small>{pattern === "leader-team" ? "11名を1つのチームとして扱います" : "紹介の連鎖のため、サブIDは使いません"}</small></div>}
+        {pattern === "optimized" || pattern === "leader-team" ? <label>{pattern === "leader-team" ? "リーダーのAさん役" : "Aさん役"}<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!trainerRoleAvailable(rootMember?.trainerCredential ?? "NONE", option.value)}>{option.label}</option>)}</select><small className="field-note">{pattern === "leader-team" ? "10名分は未加算。" : ""}現在資格：{rootMember?.trainerCredential === "NONE" ? "未取得" : rootMember?.trainerCredential}</small></label> : <div className="story-condition"><span>一時ボーナス</span><strong>含めない</strong><small>8段到達時の継続報酬を試算します</small></div>}
       </section>
 
       <header className="simulator-workflow-heading"><div><span>3</span><div><strong>収入の集計範囲</strong><small>本人とパートナーそれぞれの保有サブIDを自動合算できます</small></div></div></header>
@@ -455,14 +476,14 @@ function Simulator() {
         {incomeMode === "pair" && <div className="income-includes"><span>パートナー収入へ合算するID</span><strong>{selectedPartner?.displayName ?? "パートナー"}（メイン）</strong>{partnerOwnedSubIds.length ? partnerOwnedSubIds.map((member) => <small key={member.id}>{member.displayName}（{member.course}・サブ）</small>) : <small>登録済みサブIDなし</small>}<em>パートナーのサブID分もパートナー収入へ合算します</em></div>}
       </section>
 
-      {pattern === "optimized" && <><header className="simulator-workflow-heading"><div><span>4</span><div><strong>タイトル取得の優先対象</strong><small>誰が紹介者になると目標タイトルへ近づくかを配置と一緒に比較します</small></div></div></header>
+      {(pattern === "optimized" || pattern === "leader-team") && <><header className="simulator-workflow-heading"><div><span>4</span><div><strong>タイトル取得の優先対象</strong><small>{pattern === "leader-team" ? "どのIDの直下にチームリーダーを置くか比較します" : "誰が紹介者になると目標タイトルへ近づくかを配置と一緒に比較します"}</small></div></div></header>
       <section className="simulator-step-grid simulator-title-priority">
         {incomeMode !== "pair" && <label>比較するパートナー<select value={selectedPartnerId} disabled={!partnerOptions.length} onChange={(event) => { setPartnerMemberId(event.target.value); setTitlePriorityMemberId("auto"); clearResults(); }}>{partnerOptions.length ? partnerOptions.map((member) => <option key={member.id} value={member.id}>{member.displayName}（{member.course}）</option>) : <option value="">対象メンバーがいません</option>}</select><small className="field-note">収入合算を使わなくてもタイトル比較には含められます</small></label>}
         <label>優先するID<select value={selectedTitlePriorityId} onChange={(event) => { setTitlePriorityMemberId(event.target.value); clearResults(); }}><option value="auto">自動比較（おすすめを計算）</option>{titlePriorityOptions.map((option) => <option key={option.member.id} value={option.member.id}>{priorityRoleLabel(option.role)}：{option.member.displayName}</option>)}</select><small className="field-note">目標：{goal.data?.targetTitle}。自動比較では各IDの到達度と報酬差を比較します</small></label>
         <div className="income-includes"><span>比較するタイトル系統</span>{titlePriorityOptions.map((option) => <small key={option.member.id}>{priorityRoleLabel(option.role)}：{option.member.displayName}（{option.member.course}）</small>)}<em>優先IDが紹介者になる前提です。配置親は全候補から別に最適化します</em></div>
       </section></>}
 
-      <footer className="simulator-submit"><div><strong>{pattern === "three-by-three" ? "3人ずつ増える未来を8段まで試算" : pattern === "one-by-one" ? "1人ずつつながる未来を8段まで試算" : candidateCount === 1 ? "1人の配置候補を比較" : `${candidateCount}人を順番に効率配置`}</strong><small>{pattern === "optimized" ? "計算しただけでは試算組織へ保存されません" : "遠い未来の条件付き試算として表示し、組織へは保存しません"}</small></div><button className="primary-button" disabled={busy || (incomeMode === "pair" && !selectedPartnerId) || (pattern !== "optimized" && !selectedStartingMemberId)}>{busy ? "全配置を計算中…" : pattern === "optimized" ? "配置を計算する" : "8段の未来を計算する"}</button></footer>
+      <footer className="simulator-submit"><div><strong>{pattern === "leader-team" ? "リーダーと10名を1チームで配置" : pattern === "three-by-three" ? "3人ずつ増える未来を8段まで試算" : pattern === "one-by-one" ? "1人ずつつながる未来を8段まで試算" : candidateCount === 1 ? "1人の配置候補を比較" : `${candidateCount}人を順番に効率配置`}</strong><small>{pattern === "leader-team" ? "結果を確認してから11名をまとめて仮組織へ保存できます" : pattern === "optimized" ? "計算しただけでは試算組織へ保存されません" : "遠い未来の条件付き試算として表示し、組織へは保存しません"}</small></div><button className="primary-button" disabled={busy || (incomeMode === "pair" && !selectedPartnerId) || ((pattern === "three-by-three" || pattern === "one-by-one") && !selectedStartingMemberId)}>{busy ? "全配置を計算中…" : pattern === "leader-team" ? "11名チームを計算する" : pattern === "optimized" ? "配置を計算する" : "8段の未来を計算する"}</button></footer>
     </form>
 
     {error && <div className="state-card error">{error}</div>}
@@ -473,10 +494,29 @@ function Simulator() {
 
     {storyResult && <div className="batch-results"><article className="placement-card batch-placement-card story-result-card"><div className="placement-heading"><div><small>8段の紹介ストーリー</small><h2>{storyResult.storyLabel}</h2></div><RewardAmount comparison={storyResult.incomeComparison} focus={rewardFocus} longTerm /></div><div className="story-shape" aria-label="8段の組織形状">{storyResult.generationCounts.map((count, index) => <div key={`${index}-${count}`}><small>{index + 1}段</small><strong>{number.format(count)}人</strong>{index < storyResult.generationCounts.length - 1 && <span>→</span>}</div>)}</div><div className="result-stats"><span>累計 {number.format(storyResult.placedCount)}人</span><span>タイトル {storyResult.titleBefore} → {storyResult.titleAfter}</span><span>未達 {storyResult.missingBefore} → {storyResult.missingAfter}</span></div><FocusedIncomeBreakdown comparison={storyResult.incomeComparison} focus={rewardFocus} /><BonusDeltaDetails delta={storyResult.bonusDelta} /><details className="story-generations" open><summary>8段の人数とp.v.を見る</summary><div className="story-generation-list">{storyResult.generations.map((generation) => <div key={generation.generation}><strong>{generation.generation}段目</strong><span>この段 {number.format(generation.memberCount)}人<small>{number.format(generation.pv)} p.v.</small></span><span>累計 {number.format(generation.cumulativeMemberCount)}人<small>{number.format(generation.cumulativePv)} p.v.</small></span></div>)}</div></details><p className="story-reference-note"><strong>遠い未来の参考試算</strong><span>このストーリーは試算組織へ保存しません。</span></p><p className="warning">{storyResult.warnings.join(" / ")}</p></article></div>}
 
-    {batchResult && <div className="batch-results"><article className="placement-card batch-placement-card"><div className="placement-heading"><div><small>タイトル優先：{batchResult.priorityMemberName}（{priorityRoleLabel(batchResult.priorityMemberRole)}）</small><h2>{batchResult.placedCount} / {batchResult.requestedCount}人を配置</h2></div><RewardAmount comparison={batchResult.incomeComparison} focus={rewardFocus} /></div><div className="result-stats"><span>{batchResult.priorityMemberName}のタイトル {batchResult.titleBefore} → {batchResult.titleAfter}</span><span>{batchResult.targetTitle}まで未達 {batchResult.missingBefore} → {batchResult.missingAfter}</span>{batchResult.ownedIdCountAfter !== batchResult.ownedIdCountBefore && <span>本人保有 {batchResult.ownedIdCountBefore} → {batchResult.ownedIdCountAfter}ID</span>}</div><FocusedIncomeBreakdown comparison={batchResult.incomeComparison} focus={rewardFocus} /><BonusDeltaDetails delta={batchResult.bonusDelta} /><details className="batch-steps" open><summary>配置手順を見る（{batchResult.placedCount}人）</summary><ol>{batchResult.steps.map((step) => { const stepDelta = rewardFocus === "line" ? step.lineDelta : step.grossDelta; return <li key={step.candidateMemberId}><div><strong>{step.candidateName}</strong><span>→ {step.placementMemberName} 配下</span></div><small>紹介者 {step.priorityMemberName} ・ タイトル {step.titleBefore} → {step.titleAfter} ・ 未達 {step.missingBefore} → {step.missingAfter} ・ {stepDelta >= 0 ? "+" : ""}{yen.format(stepDelta)}</small></li>; })}</ol></details><div className="result-action"><div><strong>この案を残す</strong><small>押したときだけ仮メンバーとして保存します</small></div><button className="secondary-button placement-save" disabled={savingBatch || batchResult.placedCount === 0} onClick={() => void addBatchPlacement()}>{savingBatch ? "試算組織へ一括追加中…" : `${batchResult.placedCount}人を試算組織へ追加`}</button></div><p className="warning">{batchResult.warnings.join(" / ")}</p></article></div>}
+    {batchResult && <BatchResultCard result={batchResult} focus={rewardFocus} saving={savingBatch} onSave={() => void addBatchPlacement()} />}
 
     <div className="results-list">{results.map((result) => { const resultKey = `${result.placementMemberId}-${result.priorityMemberId}`; return <article className={`placement-card rank-${result.rank}`} key={resultKey}><div className="rank-badge">#{result.rank ?? "-"}</div><div className="placement-heading"><div><small>タイトル優先：{result.priorityMemberName}（{priorityRoleLabel(result.priorityMemberRole)}）</small><h2>{result.placementMemberName} 配下</h2></div><RewardAmount comparison={result.incomeComparison} focus={rewardFocus} /></div><div className="result-stats"><span>{result.priorityMemberName}のタイトル {result.titleBefore} → {result.titleAfter}</span><span>{result.targetTitle}まで未達 {result.missingBefore} → {result.missingAfter}</span>{result.ownedIdCountAfter !== result.ownedIdCountBefore && <span>本人保有 {result.ownedIdCountBefore} → {result.ownedIdCountAfter}ID</span>}</div><FocusedIncomeBreakdown comparison={result.incomeComparison} focus={rewardFocus} /><BonusBreakdownDetails result={result} /><ul>{result.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><div className="result-action"><div><strong>この案を残す</strong><small>{result.priorityMemberName}を紹介者として仮メンバーを保存します</small></div><button className="secondary-button placement-save" disabled={!result.eligible || savingId !== null} onClick={() => void addPlacement(result)}>{savingId === resultKey ? "試算組織へ追加中…" : "この配置を試算組織へ追加"}</button></div><p className="warning">{result.warnings.join(" / ")}</p></article>; })}</div>
   </>}</PageState>;
+}
+
+function BatchResultCard({ result, focus, saving, onSave }: {
+  result: BatchSimulationResult | LeaderTeamSimulationResult;
+  focus: RewardFocus;
+  saving: boolean;
+  onSave: () => void;
+}) {
+  const isLeaderTeam = result.strategy === "leader-team";
+  return <div className="batch-results"><article className="placement-card batch-placement-card">
+    <div className="placement-heading"><div><small>タイトル優先：{result.priorityMemberName}（{priorityRoleLabel(result.priorityMemberRole)}）</small><h2>{isLeaderTeam ? "11名チームの配置案" : `${result.placedCount} / ${result.requestedCount}人を配置`}</h2></div><RewardAmount comparison={result.incomeComparison} focus={focus} /></div>
+    {isLeaderTeam && <section className="leader-team-summary"><div><small>リーダー配置先</small><strong>{result.leaderPlacementMemberName} 配下</strong></div><div><small>チーム構成</small><strong>リーダー＋1次7名＋2次3名</strong></div><div><small>リーダー到達</small><strong>{result.leaderTitleAfter} / DRまで未達{result.leaderDrMissingAfter}件</strong></div></section>}
+    <div className="result-stats"><span>{result.priorityMemberName}のタイトル {result.titleBefore} → {result.titleAfter}</span><span>{result.targetTitle}まで未達 {result.missingBefore} → {result.missingAfter}</span>{result.ownedIdCountAfter !== result.ownedIdCountBefore && <span>本人保有 {result.ownedIdCountBefore} → {result.ownedIdCountAfter}ID</span>}</div>
+    <FocusedIncomeBreakdown comparison={result.incomeComparison} focus={focus} />
+    <BonusDeltaDetails delta={result.bonusDelta} />
+    <details className="batch-steps" open><summary>{isLeaderTeam ? "11名チームの配置を見る" : `配置手順を見る（${result.placedCount}人）`}</summary><ol>{result.steps.map((step) => { const stepDelta = focus === "line" ? step.lineDelta : step.grossDelta; return <li key={step.candidateMemberId}><div><strong>{step.candidateName}</strong><span>→ {step.placementMemberName} 配下</span></div><small>紹介者 {step.priorityMemberName} ・ タイトル {step.titleBefore} → {step.titleAfter} ・ 未達 {step.missingBefore} → {step.missingAfter} ・ {stepDelta >= 0 ? "+" : ""}{yen.format(stepDelta)}</small></li>; })}</ol></details>
+    <div className="result-action"><div><strong>{isLeaderTeam ? "11名チームをこの形で残す" : "この案を残す"}</strong><small>押したときだけ仮メンバーとして保存します</small></div><button className="secondary-button placement-save" disabled={saving || result.placedCount === 0} onClick={onSave}>{saving ? "試算組織へ一括追加中…" : isLeaderTeam ? "11名チームを試算組織へ追加" : `${result.placedCount}人を試算組織へ追加`}</button></div>
+    <p className="warning">{result.warnings.join(" / ")}</p>
+  </article></div>;
 }
 
 function RewardAmount({ comparison, focus, longTerm = false }: { comparison: PlacementResult["incomeComparison"]; focus: RewardFocus; longTerm?: boolean }) {
