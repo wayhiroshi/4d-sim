@@ -307,12 +307,16 @@ export interface SimulationRequest {
   trainerBonusRole?: TrainerBonusRole | null;
   incomeMode?: "self" | "pair";
   partnerMemberId?: string | null;
+  titlePriorityMode?: "auto" | "member";
+  titlePriorityMemberId?: string | null;
   taxProfile: TaxProfile;
 }
 
 export interface BatchSimulationRequest extends SimulationRequest {
   candidateCount: number;
 }
+
+export type LeaderTeamSimulationRequest = SimulationRequest;
 
 export type GrowthStoryKind = "three-by-three" | "one-by-one";
 
@@ -369,6 +373,12 @@ export interface PlacementResult {
   estimatedNetDelta: number;
   bonusDelta: PlacementBonusDelta;
   incomeComparison: PlacementIncomeComparison;
+  priorityMemberId: string;
+  priorityMemberName: string;
+  priorityMemberRole: "self" | "self-sub" | "partner" | "partner-sub";
+  targetTitle: TitleCode;
+  targetAchievedBefore: boolean;
+  targetAchievedAfter: boolean;
   titleBefore: TitleCode;
   titleAfter: TitleCode;
   missingBefore: number;
@@ -386,6 +396,9 @@ export interface BatchPlacementStep {
   candidateName: string;
   placementMemberId: string;
   placementMemberName: string;
+  priorityMemberId: string;
+  priorityMemberName: string;
+  priorityMemberRole: "self" | "self-sub" | "partner" | "partner-sub";
   titleBefore: TitleCode;
   titleAfter: TitleCode;
   missingBefore: number;
@@ -401,6 +414,12 @@ export interface BatchSimulationResult {
   placedCount: number;
   unplacedCount: number;
   steps: BatchPlacementStep[];
+  priorityMemberId: string;
+  priorityMemberName: string;
+  priorityMemberRole: "self" | "self-sub" | "partner" | "partner-sub";
+  targetTitle: TitleCode;
+  targetAchievedBefore: boolean;
+  targetAchievedAfter: boolean;
   titleBefore: TitleCode;
   titleAfter: TitleCode;
   missingBefore: number;
@@ -410,6 +429,16 @@ export interface BatchSimulationResult {
   bonusDelta: PlacementBonusDelta;
   incomeComparison: PlacementIncomeComparison;
   warnings: string[];
+}
+
+export interface LeaderTeamSimulationResult extends Omit<BatchSimulationResult, "strategy"> {
+  strategy: "leader-team";
+  leaderMemberId: string;
+  leaderName: string;
+  leaderPlacementMemberId: string;
+  leaderPlacementMemberName: string;
+  leaderTitleAfter: TitleCode;
+  leaderDrMissingAfter: number;
 }
 
 export interface GrowthStoryGeneration {

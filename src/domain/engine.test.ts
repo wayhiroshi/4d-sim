@@ -14,6 +14,7 @@ import {
   runForecast,
   simulateBatchPlacements,
   simulateGrowthStory,
+  simulateLeaderTeam,
   simulatePlacements
 } from "./engine";
 import type { CourseCode, ForecastScenario, Member, OrganizationSnapshot, PurchaseEvent, SimulationMember, TaxProfile } from "../shared/types";
@@ -296,9 +297,10 @@ describe("placement simulation", () => {
 
   it("calculates self and partner separately, then ranks by the combined two-person increase", () => {
     const sub = { ...member("sub", "root"), idKind: "sub" as const, masterMemberId: "root" };
+    const partnerSub = { ...member("partner-sub", "partner", "G"), idKind: "sub" as const, masterMemberId: "partner" };
     const data = snapshot(
-      [member("root", null, "G"), sub, member("partner", "root")],
-      [purchase("root-repeat", "root", 10670), purchase("partner-repeat", "partner", 5330)]
+      [member("root", null, "G"), sub, member("partner", "root"), partnerSub],
+      [purchase("root-repeat", "root", 10670), purchase("partner-repeat", "partner", 5330), purchase("partner-sub-repeat", "partner-sub", 10670)]
     );
     const original = structuredClone(data);
     const results = simulatePlacements(data, {
@@ -310,8 +312,9 @@ describe("placement simulation", () => {
     expect(partnerPlacement?.incomeComparison).toMatchObject({
       mode: "pair",
       self: { memberId: "root", memberName: "root", includedIds: [{ memberId: "root" }, { memberId: "sub" }] },
-      partner: { memberId: "partner", memberName: "partner", includedIds: [{ memberId: "partner" }] }
+      partner: { memberId: "partner", memberName: "partner", includedIds: [{ memberId: "partner" }, { memberId: "partner-sub" }] }
     });
+    expect(partnerPlacement?.incomeComparison.partner?.before).toEqual(computeBonus(data, "partner", tax));
     expect(partnerPlacement?.incomeComparison.partner?.delta.line).toBe(800);
     expect(partnerPlacement?.incomeComparison.combined.grossDelta).toBe(
       (partnerPlacement?.incomeComparison.self.delta.gross ?? 0) + (partnerPlacement?.incomeComparison.partner?.delta.gross ?? 0)
@@ -320,6 +323,39 @@ describe("placement simulation", () => {
       (partnerPlacement?.incomeComparison.self.delta.estimatedNet ?? 0) + (partnerPlacement?.incomeComparison.partner?.delta.estimatedNet ?? 0)
     );
     expect(data).toEqual(original);
+  });
+
+  it("automatically prioritizes the only owned ID that has not yet reached the target title", () => {
+    const selfSub = { ...member("self-sub", "root", "A", "external"), idKind: "sub" as const, masterMemberId: "root" };
+    const partnerSub = { ...member("partner-sub", "partner", "A", "external"), idKind: "sub" as const, masterMemberId: "partner" };
+    const members = [
+      member("root", null, "G"),
+      selfSub,
+      member("partner", "root", "G", "external"),
+      partnerSub,
+      member("ps-first-1", "partner-sub", "A", "external"),
+      member("ps-first-2", "partner-sub", "A", "external"),
+      member("ps-first-3", "partner-sub", "A", "external"),
+      member("ps-second-1", "ps-first-1", "A", "external"),
+      member("ps-second-2", "ps-first-2", "A", "external")
+    ];
+    const data = snapshot(members, members.map((item) => purchase(`p-${item.id}`, item.id, item.course === "G" ? 10670 : 5330)));
+    const result = simulatePlacements(data, {
+      candidateName: "候補", course: "A", idKind: "master", period, targetTitle: "LD",
+      incomeMode: "pair", partnerMemberId: "partner", titlePriorityMode: "auto",
+      placementCandidateIds: ["partner-sub"], taxProfile: tax
+    })[0];
+
+    expect(result).toMatchObject({
+      priorityMemberId: "partner-sub",
+      priorityMemberRole: "partner-sub",
+      targetTitle: "LD",
+      targetAchievedBefore: false,
+      targetAchievedAfter: true,
+      earliestAchievementPeriod: period,
+      missingAfter: 0
+    });
+    expect(result?.reasons[0]).toContain("partner-subがLD条件に到達");
   });
 
   it("rejects the root and owned sub IDs as pair-income partners", () => {
@@ -474,6 +510,44 @@ describe("batch placement simulation", () => {
     const result = simulateBatchPlacements(data, { ...request, candidateCount: 10, idKind: "sub" });
     expect(result).toMatchObject({ requestedCount: 10, placedCount: 5, unplacedCount: 5, ownedIdCountBefore: 1, ownedIdCountAfter: 6 });
     expect(result.warnings.some((warning) => warning.includes("5人は配置できませんでした"))).toBe(true);
+  });
+});
+
+describe("leader team simulation", () => {
+  const request = {
+    candidateName: "爆発チーム",
+    course: "A" as const,
+    idKind: "master" as const,
+    period,
+    targetTitle: "LD" as const,
+    incomeMode: "self" as const,
+    partnerMemberId: null,
+    trainerBonusRole: null,
+    taxProfile: tax
+  };
+
+  it("リーダーの下に7名、その次の段に3名を固定して11名を試算する", () => {
+    const data = snapshot([member("root", null, "G")], [purchase("root", "root", 10670)]);
+    const original = structuredClone(data);
+    const result = simulateLeaderTeam(data, request);
+    const leader = result.steps[0]!;
+    const directMembers = result.steps.slice(1, 8);
+    const secondLineMembers = result.steps.slice(8);
+
+    expect(result).toMatchObject({ strategy: "leader-team", requestedCount: 11, placedCount: 11, unplacedCount: 0 });
+    expect(leader).toMatchObject({ candidateName: "爆発チームリーダー", placementMemberId: "root", priorityMemberId: "root" });
+    expect(directMembers).toHaveLength(7);
+    expect(directMembers.every((step) => step.placementMemberId === leader.candidateMemberId)).toBe(true);
+    expect(directMembers.every((step) => step.priorityMemberId === leader.candidateMemberId)).toBe(true);
+    expect(secondLineMembers.map((step) => step.placementMemberId)).toEqual(directMembers.slice(0, 3).map((step) => step.candidateMemberId));
+    expect(secondLineMembers.every((step) => step.priorityMemberId === leader.candidateMemberId)).toBe(true);
+    expect(result.leaderTitleAfter).toBe("LD");
+    expect(data).toEqual(original);
+  });
+
+  it("同じ入力で同じ配置と金額を返す", () => {
+    const data = snapshot([member("root", null, "G")], [purchase("root", "root", 10670)]);
+    expect(simulateLeaderTeam(data, request)).toEqual(simulateLeaderTeam(data, request));
   });
 });
 

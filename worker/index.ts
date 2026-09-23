@@ -14,25 +14,30 @@ import {
   periodForDate,
   runForecast,
   simulateBatchPlacements,
+  simulateLeaderTeam,
   simulateGrowthStory,
   simulatePlacements
 } from "../src/domain/engine";
 import { planConfig } from "../src/domain/plan";
+import { placementValidationError } from "../src/domain/placement";
 import {
   COURSES,
   TITLE_ORDER,
   type DashboardData,
   type Goal,
   type Member,
+  type OrganizationSnapshot,
   type PurchaseEvent,
   type SavedForecast,
   type SimulationMember,
+  type SimulationRequest,
   type SimulationOrganization,
   type TitleChecklistData,
 } from "../src/shared/types";
 import {
   getGoal,
   getTaxProfile,
+  deleteSimulationMember,
   deleteSavedForecast,
   insertSavedForecast,
   listSavedForecasts,
@@ -114,6 +119,8 @@ const simulationInputSchema = z.object({
   trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null),
   incomeMode: z.enum(["self", "pair"]).default("self"),
   partnerMemberId: z.string().min(1).max(80).nullable().default(null),
+  titlePriorityMode: z.enum(["auto", "member"]).default("member"),
+  titlePriorityMemberId: z.string().min(1).max(120).nullable().default(null),
   taxProfile: taxProfileSchema
 });
 const validatePairIncome = (value: z.infer<typeof simulationInputSchema>, context: z.RefinementCtx) => {
@@ -125,6 +132,7 @@ const simulationSchema = simulationInputSchema.superRefine(validatePairIncome);
 const batchSimulationSchema = simulationInputSchema.extend({
   candidateCount: z.number().int().min(2).max(20)
 }).superRefine(validatePairIncome);
+const leaderTeamSimulationSchema = simulationInputSchema.superRefine(validatePairIncome);
 const growthStorySimulationSchema = simulationInputSchema.extend({
   story: z.enum(["three-by-three", "one-by-one"]),
   startingMemberId: z.string().min(1).max(120)
@@ -133,9 +141,11 @@ const growthStorySimulationSchema = simulationInputSchema.extend({
 const simulationMemberSchema = z.object({
   displayName: z.string().trim().min(1).max(80),
   parentMemberId: z.string().min(1).max(80),
+  introducerMemberId: z.string().min(1).max(120).optional(),
   period: periodSchema,
   course: courseSchema,
   idKind: z.enum(["master", "sub"]).default("master"),
+  masterMemberId: nullableId,
   trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null)
 });
 const batchSimulationMemberSchema = z.object({
@@ -153,9 +163,17 @@ const batchSimulationMemberSchema = z.object({
 const displayNameSchema = z.object({ displayName: z.string().trim().min(1).max(80) });
 const memberIdentitySchema = z.object({
   displayName: z.string().trim().min(1).max(80),
-  idKind: z.enum(["master", "sub"])
+  idKind: z.enum(["master", "sub"]),
+  masterMemberId: nullableId,
+  parentMemberId: nullableId
 });
-const simulationMemberIdentitySchema = memberIdentitySchema.extend({ period: periodSchema });
+const simulationMemberIdentitySchema = z.object({
+  displayName: z.string().trim().min(1).max(80),
+  idKind: z.enum(["master", "sub"]),
+  masterMemberId: nullableId,
+  parentMemberId: z.string().min(1).max(120),
+  period: periodSchema
+});
 const trainerProfileSchema = z.object({
   trainerCredential: z.enum(["NONE", "PT", "ST"]),
   sponsorLicense: z.boolean(),
@@ -165,6 +183,22 @@ const trainerProfileSchema = z.object({
   startTrainerCourseCompleted: z.boolean(),
   startTrainerKitPurchased: z.boolean()
 });
+
+function invalidTitlePriorityMember(
+  snapshot: OrganizationSnapshot,
+  request: Pick<SimulationRequest, "titlePriorityMode" | "titlePriorityMemberId" | "partnerMemberId">
+): boolean {
+  if ((request.titlePriorityMode ?? "member") === "auto") return false;
+  const root = snapshot.members.find((member) => member.parentMemberId === null);
+  if (!root) return true;
+  const selectedId = request.titlePriorityMemberId ?? root.id;
+  const allowedIds = new Set(ownedIds(snapshot, root.id).map((member) => member.id));
+  const partner = request.partnerMemberId
+    ? snapshot.members.find((member) => member.id === request.partnerMemberId && member.idKind === "master" && member.masterMemberId === null && member.id !== root.id && (member.endedPeriod === null || member.endedPeriod > snapshot.period))
+    : null;
+  if (partner) ownedIds(snapshot, partner.id).forEach((member) => allowedIds.add(member.id));
+  return !allowedIds.has(selectedId);
+}
 
 const forecastScenarioSchema = z.object({
     id: z.enum(["conservative", "standard", "challenge"]),
@@ -341,20 +375,28 @@ app.post("/api/v1/simulation-members", async (context) => {
   const root = snapshot.members.find((member) => member.parentMemberId === null);
   if (!root) return context.json({ error: "ルート会員が登録されていません" }, 409);
   const parent = snapshot.members.find((member) => member.id === input.parentMemberId && member.endedPeriod === null);
+  const introducer = snapshot.members.find((member) => member.id === (input.introducerMemberId ?? root.id) && member.endedPeriod === null);
   if (!parent) return context.json({ error: "配置先が存在しません" }, 400);
+  if (!introducer) return context.json({ error: "紹介者が存在しません" }, 400);
   if (snapshot.members.filter((member) => member.parentMemberId === parent.id && member.endedPeriod === null).length >= planConfig.firstLineLimit) {
     return context.json({ error: "配置先の1次ラインが上限7名です" }, 400);
   }
-  if (input.idKind === "sub" && ownedIds(snapshot, root.id).length - 1 >= planConfig.maxSubIdsPerMaster) {
-    return context.json({ error: `自分のサブIDは通常${planConfig.maxSubIdsPerMaster}件までです` }, 400);
+  const requestedMaster = input.idKind === "sub"
+    ? snapshot.members.find((member) => member.id === (input.masterMemberId ?? root.id) && member.idKind === "master" && member.masterMemberId === null && member.endedPeriod === null)
+    : null;
+  if (input.idKind === "sub" && !requestedMaster) {
+    return context.json({ error: "サブIDの所有者となる有効なマスターIDを選択してください" }, 400);
+  }
+  if (requestedMaster && ownedIds(snapshot, requestedMaster.id).length - 1 >= planConfig.maxSubIdsPerMaster) {
+    return context.json({ error: `選択したマスターIDのサブIDは通常${planConfig.maxSubIdsPerMaster}件までです` }, 400);
   }
   const simulationMember: SimulationMember = {
     id: `trial-${crypto.randomUUID()}`,
     workspaceId,
     displayName: input.displayName,
     parentMemberId: parent.id,
-    introducerMemberId: root.id,
-    masterMemberId: input.idKind === "sub" ? root.id : null,
+    introducerMemberId: requestedMaster?.id ?? introducer.id,
+    masterMemberId: requestedMaster?.id ?? null,
     trainerMemberId: input.trainerBonusRole ? root.id : null,
     trainerBonusRole: input.trainerBonusRole,
     idKind: input.idKind,
@@ -432,6 +474,21 @@ app.delete("/api/v1/simulation-members", async (context) => {
   return context.json({ deleted: result.meta.changes });
 });
 
+app.delete("/api/v1/simulation-members/:id", async (context) => {
+  const id = z.string().min(1).max(120).parse(context.req.param("id"));
+  const period = periodSchema.parse(context.req.query("period"));
+  const workspaceId = context.get("workspaceId");
+  const simulationMembers = await listSimulationMembers(context.env.DB, workspaceId, period);
+  if (!simulationMembers.some((member) => member.id === id)) {
+    return context.json({ error: "仮メンバーが見つかりません" }, 404);
+  }
+  if (simulationMembers.some((member) => member.parentMemberId === id)) {
+    return context.json({ error: "配下の仮メンバーがいるため削除できません。先に配下のアップを変更してください" }, 409);
+  }
+  const deleted = await deleteSimulationMember(context.env.DB, workspaceId, id, period);
+  return context.json({ deleted });
+});
+
 app.patch("/api/v1/simulation-members/:id/display-name", async (context) => {
   const id = z.string().min(1).max(120).parse(context.req.param("id"));
   const input = await boundedJson(context.req.raw, displayNameSchema);
@@ -453,14 +510,23 @@ app.patch("/api/v1/simulation-members/:id/identity", async (context) => {
   if (!root) return context.json({ error: "本人のマスターIDが見つかりません" }, 400);
   if (!member) return context.json({ error: "仮メンバーが見つかりません" }, 404);
   const organization = applySimulationMembers(snapshot, simulationMembers);
-  const otherSubIds = organization.members.filter((item) => item.id !== id && item.idKind === "sub" && item.masterMemberId === root.id).length;
+  const placementError = placementValidationError(organization.members, id, input.parentMemberId, planConfig.firstLineLimit);
+  if (placementError) return context.json({ error: placementError }, 400);
+  const requestedMaster = input.idKind === "sub"
+    ? organization.members.find((item) => item.id === (input.masterMemberId ?? root.id) && item.idKind === "master" && item.masterMemberId === null && !item.id.startsWith("trial-") && item.endedPeriod === null) ?? null
+    : null;
+  if (input.idKind === "sub" && !requestedMaster) {
+    return context.json({ error: "サブIDの所有者となる有効なマスターIDを選択してください" }, 400);
+  }
+  const otherSubIds = organization.members.filter((item) => item.id !== id && item.idKind === "sub" && item.masterMemberId === requestedMaster?.id).length;
   if (input.idKind === "sub" && otherSubIds >= planConfig.maxSubIdsPerMaster) {
     return context.json({ error: `自分のサブIDは通常${planConfig.maxSubIdsPerMaster}件までです` }, 400);
   }
   const updated = await updateSimulationMemberIdentity(
     context.env.DB, workspaceId, id, input.displayName, input.idKind,
-    input.idKind === "sub" ? root.id : null,
-    input.idKind === "sub" ? root.id : member.introducerMemberId
+    requestedMaster?.id ?? null,
+    requestedMaster?.id ?? member.introducerMemberId,
+    input.parentMemberId
   );
   if (!updated) return context.json({ error: "仮メンバーが見つかりません" }, 404);
   return context.json({ id, displayName: input.displayName, idKind: input.idKind });
@@ -525,17 +591,32 @@ app.patch("/api/v1/members/:id/identity", async (context) => {
   if (member.id === root.id && input.idKind === "sub") {
     return context.json({ error: "本人のルートIDはマスターIDから変更できません" }, 400);
   }
+  if (member.id === root.id && input.parentMemberId !== null && input.parentMemberId !== undefined) {
+    return context.json({ error: "本人のルートIDのアップは変更できません" }, 400);
+  }
+  if (member.id !== root.id) {
+    if (!input.parentMemberId) return context.json({ error: "変更先のアップを選択してください" }, 400);
+    const placementError = placementValidationError(snapshot.members, id, input.parentMemberId, planConfig.firstLineLimit);
+    if (placementError) return context.json({ error: placementError }, 400);
+  }
   if (input.idKind === "sub" && snapshot.members.some((item) => item.masterMemberId === member.id && item.idKind === "sub")) {
     return context.json({ error: "サブIDを所有しているメンバーはサブIDへ変更できません" }, 400);
   }
-  const otherSubIds = snapshot.members.filter((item) => item.id !== id && item.idKind === "sub" && item.masterMemberId === root.id).length;
+  const requestedMaster = input.idKind === "sub"
+    ? snapshot.members.find((item) => item.id === input.masterMemberId && item.idKind === "master" && item.id !== member.id && (item.endedPeriod === null || item.endedPeriod > snapshot.period)) ?? null
+    : null;
+  if (input.idKind === "sub" && !requestedMaster) {
+    return context.json({ error: "サブIDの所有者となる有効なマスターIDを選択してください" }, 400);
+  }
+  const otherSubIds = snapshot.members.filter((item) => item.id !== id && item.idKind === "sub" && item.masterMemberId === requestedMaster?.id).length;
   if (input.idKind === "sub" && otherSubIds >= planConfig.maxSubIdsPerMaster) {
-    return context.json({ error: `自分のサブIDは通常${planConfig.maxSubIdsPerMaster}件までです` }, 400);
+    return context.json({ error: `選択したマスターIDのサブIDは通常${planConfig.maxSubIdsPerMaster}件までです` }, 400);
   }
   const updated = await updateMemberIdentity(
     context.env.DB, workspaceId, id, input.displayName, input.idKind,
-    input.idKind === "sub" ? root.id : null,
-    input.idKind === "sub" ? root.id : member.introducerMemberId
+    requestedMaster?.id ?? null,
+    requestedMaster?.id ?? member.introducerMemberId,
+    member.id === root.id ? member.parentMemberId : input.parentMemberId!
   );
   if (!updated) return context.json({ error: "メンバーが見つかりません" }, 404);
   return context.json({ id, displayName: input.displayName, idKind: input.idKind });
@@ -597,6 +678,9 @@ app.post("/api/v1/simulations", async (context) => {
     listSimulationMembers(context.env.DB, workspaceId, request.period)
   ]);
   const snapshot = applySimulationMembers(actual, simulationMembers);
+  if (invalidTitlePriorityMember(snapshot, request)) {
+    return context.json({ error: "タイトル優先対象は本人・パートナーまたは双方の保有サブIDから選択してください" }, 400);
+  }
   if (request.incomeMode === "pair") {
     const root = snapshot.members.find((member) => member.parentMemberId === null);
     const partner = snapshot.members.find((member) => member.id === request.partnerMemberId);
@@ -614,6 +698,9 @@ app.post("/api/v1/simulations/batch", async (context) => {
     listSimulationMembers(context.env.DB, workspaceId, request.period)
   ]);
   const snapshot = applySimulationMembers(actual, simulationMembers);
+  if (invalidTitlePriorityMember(snapshot, request)) {
+    return context.json({ error: "タイトル優先対象は本人・パートナーまたは双方の保有サブIDから選択してください" }, 400);
+  }
   if (request.incomeMode === "pair") {
     const root = snapshot.members.find((member) => member.parentMemberId === null);
     const partner = snapshot.members.find((member) => member.id === request.partnerMemberId);
@@ -621,6 +708,26 @@ app.post("/api/v1/simulations/batch", async (context) => {
     if (invalidPartner) return context.json({ error: "選択したパートナーは2名合算の対象にできません" }, 400);
   }
   return context.json({ result: simulateBatchPlacements(snapshot, request) });
+});
+
+app.post("/api/v1/simulations/leader-team", async (context) => {
+  const request = await boundedJson(context.req.raw, leaderTeamSimulationSchema);
+  const workspaceId = context.get("workspaceId");
+  const [actual, simulationMembers] = await Promise.all([
+    loadSnapshot(context.env.DB, workspaceId, request.period),
+    listSimulationMembers(context.env.DB, workspaceId, request.period)
+  ]);
+  const snapshot = applySimulationMembers(actual, simulationMembers);
+  if (invalidTitlePriorityMember(snapshot, request)) {
+    return context.json({ error: "タイトル優先対象は本人・パートナーまたは双方の保有サブIDから選択してください" }, 400);
+  }
+  if (request.incomeMode === "pair") {
+    const root = snapshot.members.find((member) => member.parentMemberId === null);
+    const partner = snapshot.members.find((member) => member.id === request.partnerMemberId);
+    const invalidPartner = !root || !partner || partner.id === root.id || partner.idKind !== "master" || partner.masterMemberId !== null || (partner.endedPeriod !== null && partner.endedPeriod <= snapshot.period);
+    if (invalidPartner) return context.json({ error: "選択したパートナーは2名合算の対象にできません" }, 400);
+  }
+  return context.json({ result: simulateLeaderTeam(snapshot, { ...request, idKind: "master" }) });
 });
 
 app.post("/api/v1/simulations/story", async (context) => {
