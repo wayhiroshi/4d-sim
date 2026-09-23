@@ -324,6 +324,39 @@ describe("placement simulation", () => {
     expect(data).toEqual(original);
   });
 
+  it("automatically prioritizes the only owned ID that has not yet reached the target title", () => {
+    const selfSub = { ...member("self-sub", "root", "A", "external"), idKind: "sub" as const, masterMemberId: "root" };
+    const partnerSub = { ...member("partner-sub", "partner", "A", "external"), idKind: "sub" as const, masterMemberId: "partner" };
+    const members = [
+      member("root", null, "G"),
+      selfSub,
+      member("partner", "root", "G", "external"),
+      partnerSub,
+      member("ps-first-1", "partner-sub", "A", "external"),
+      member("ps-first-2", "partner-sub", "A", "external"),
+      member("ps-first-3", "partner-sub", "A", "external"),
+      member("ps-second-1", "ps-first-1", "A", "external"),
+      member("ps-second-2", "ps-first-2", "A", "external")
+    ];
+    const data = snapshot(members, members.map((item) => purchase(`p-${item.id}`, item.id, item.course === "G" ? 10670 : 5330)));
+    const result = simulatePlacements(data, {
+      candidateName: "候補", course: "A", idKind: "master", period, targetTitle: "LD",
+      incomeMode: "pair", partnerMemberId: "partner", titlePriorityMode: "auto",
+      placementCandidateIds: ["partner-sub"], taxProfile: tax
+    })[0];
+
+    expect(result).toMatchObject({
+      priorityMemberId: "partner-sub",
+      priorityMemberRole: "partner-sub",
+      targetTitle: "LD",
+      targetAchievedBefore: false,
+      targetAchievedAfter: true,
+      earliestAchievementPeriod: period,
+      missingAfter: 0
+    });
+    expect(result?.reasons[0]).toContain("partner-subがLD条件に到達");
+  });
+
   it("rejects the root and owned sub IDs as pair-income partners", () => {
     const sub = { ...member("sub", "root"), idKind: "sub" as const, masterMemberId: "root" };
     const data = snapshot([member("root", null, "G"), sub], [purchase("root-repeat", "root", 10670)]);

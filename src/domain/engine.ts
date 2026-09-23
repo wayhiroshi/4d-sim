@@ -607,6 +607,63 @@ const emptyPlacementBonusDelta = (): PlacementBonusDelta => ({
 
 const PAIR_INCOME_WARNING = "本人とパートナーは、それぞれの保有サブIDを合算してから税・控除条件を個別に適用し、2名分を合計しています。実際の条件が異なる場合は総ボーナスを基準に確認してください";
 
+type TitlePriorityRole = PlacementResult["priorityMemberRole"];
+type TitlePriorityCandidate = { member: Member; role: TitlePriorityRole };
+
+const activeInPeriod = (member: Member, period: string): boolean =>
+  member.endedPeriod === null || member.endedPeriod > period;
+
+function titlePriorityCandidates(
+  snapshot: OrganizationSnapshot,
+  request: SimulationRequest,
+  root: Member
+): TitlePriorityCandidate[] {
+  const candidates: TitlePriorityCandidate[] = [
+    { member: root, role: "self" },
+    ...ownedIds(snapshot, root.id).slice(1).map((member) => ({ member, role: "self-sub" as const }))
+  ];
+  const partner = request.partnerMemberId
+    ? snapshot.members.find((member) =>
+      member.id === request.partnerMemberId && member.id !== root.id && member.idKind === "master" &&
+      member.masterMemberId === null && activeInPeriod(member, snapshot.period)
+    ) ?? null
+    : null;
+  if (partner) {
+    candidates.push(
+      { member: partner, role: "partner" },
+      ...ownedIds(snapshot, partner.id).slice(1).map((member) => ({ member, role: "partner-sub" as const }))
+    );
+  }
+  if ((request.titlePriorityMode ?? "member") === "auto") return candidates;
+  const selectedId = request.titlePriorityMemberId ?? root.id;
+  const selected = candidates.find((candidate) => candidate.member.id === selectedId);
+  if (!selected) throw new Error("The title priority member must be self, partner, or one of their owned sub IDs");
+  return [selected];
+}
+
+function titleTargetState(snapshot: OrganizationSnapshot, memberId: string, targetTitle: TitleCode) {
+  const evaluation = evaluateTitle(snapshot, memberId);
+  const reached = titleAtLeast(evaluation.achievedTitle, targetTitle);
+  const target = targetTitle === "NONE"
+    ? null
+    : evaluateTitleChecklists(snapshot, memberId).find((item) => item.code === targetTitle) ?? null;
+  const missing = reached ? 0 : target?.conditions.filter((condition) => !condition.met).length ?? missingCount(evaluation);
+  return { evaluation, reached, missing };
+}
+
+function compareTitlePriorityResults(a: PlacementResult, b: PlacementResult): number {
+  const stage = (result: PlacementResult) => result.targetAchievedBefore ? 2 : result.targetAchievedAfter ? 0 : 1;
+  const gain = (result: PlacementResult) => result.missingBefore - result.missingAfter;
+  const titleGain = (result: PlacementResult) => TITLE_ORDER.indexOf(result.titleAfter) - TITLE_ORDER.indexOf(result.titleBefore);
+  return stage(a) - stage(b) ||
+    a.missingAfter - b.missingAfter ||
+    gain(b) - gain(a) ||
+    titleGain(b) - titleGain(a) ||
+    b.incomeComparison.combined.grossDelta - a.incomeComparison.combined.grossDelta ||
+    a.priorityMemberId.localeCompare(b.priorityMemberId) ||
+    a.placementMemberId.localeCompare(b.placementMemberId);
+}
+
 function placementIncomeComparison(
   mode: "self" | "pair",
   self: Member,
@@ -781,7 +838,6 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
   if (incomeMode === "pair" && (!partner || partner.id === root.id || partner.idKind !== "master" || partner.masterMemberId !== null || (partner.endedPeriod !== null && partner.endedPeriod <= snapshot.period))) {
     throw new Error("An active partner master ID is required for pair income simulation");
   }
-  const beforeTitle = evaluateTitle(snapshot, root.id);
   const beforeBonus = computeBonus(snapshot, root.id, request.taxProfile);
   const beforePartnerBonus = partner ? computeBonus(snapshot, partner.id, request.taxProfile) : null;
   const beforeIncomeComparison = placementIncomeComparison(
@@ -790,74 +846,100 @@ export function simulatePlacements(snapshot: OrganizationSnapshot, request: Simu
   );
   const ownedIdCountBefore = ownedIds(snapshot, root.id).length;
   const subIdLimitReached = request.idKind === "sub" && ownedIdCountBefore - 1 >= planConfig.maxSubIdsPerMaster;
+  const priorityCandidates = titlePriorityCandidates(snapshot, request, root);
   const candidates = request.placementCandidateIds?.length
     ? snapshot.members.filter((member) => request.placementCandidateIds?.includes(member.id))
     : snapshot.members.filter((member) => member.endedPeriod === null);
-  const results = candidates.map((placement, index): PlacementResult => {
+  const results: PlacementResult[] = [];
+  candidates.forEach((placement, placementIndex) => {
     const firstLineCount = childrenOf(snapshot, placement.id).length;
     const eligible = firstLineCount < planConfig.firstLineLimit && !subIdLimitReached;
     if (!eligible) {
-      return {
+      const priority = priorityCandidates[0]!;
+      const beforeTarget = titleTargetState(snapshot, priority.member.id, request.targetTitle);
+      results.push({
         placementMemberId: placement.id, placementMemberName: placement.displayName, eligible: false, rank: null,
-        grossDelta: 0, estimatedNetDelta: 0, titleBefore: beforeTitle.achievedTitle, titleAfter: beforeTitle.achievedTitle,
+        grossDelta: 0, estimatedNetDelta: 0,
+        priorityMemberId: priority.member.id, priorityMemberName: priority.member.displayName, priorityMemberRole: priority.role,
+        targetTitle: request.targetTitle, targetAchievedBefore: beforeTarget.reached, targetAchievedAfter: beforeTarget.reached,
+        titleBefore: beforeTarget.evaluation.achievedTitle, titleAfter: beforeTarget.evaluation.achievedTitle,
         bonusDelta: emptyPlacementBonusDelta(),
         incomeComparison: beforeIncomeComparison,
-        missingBefore: missingCount(beforeTitle), missingAfter: missingCount(beforeTitle), earliestAchievementPeriod: null,
+        missingBefore: beforeTarget.missing, missingAfter: beforeTarget.missing, earliestAchievementPeriod: null,
         ownedIdCountBefore, ownedIdCountAfter: ownedIdCountBefore,
         reasons: [], warnings: [
           ...(firstLineCount >= planConfig.firstLineLimit ? ["1次ライン上限7名に達しています"] : []),
           ...(subIdLimitReached ? [`自分のサブIDは通常上限${planConfig.maxSubIdsPerMaster}件に達しています`] : [])
         ]
-      };
+      });
+      return;
     }
-    const simulated = cloneWithCandidate(snapshot, request, placement.id, String(index + 1));
-    const afterTitle = evaluateTitle(simulated, root.id);
-    const afterBonus = computeBonus(simulated, root.id, request.taxProfile);
-    const afterPartnerBonus = partner ? computeBonus(simulated, partner.id, request.taxProfile) : null;
-    const bonusDelta = compareBonusBreakdowns(beforeBonus, afterBonus);
-    const incomeComparison = placementIncomeComparison(
-      incomeMode, root, beforeBonus, afterBonus, partner, beforePartnerBonus, afterPartnerBonus,
-      ownedIds(simulated, root.id), partner ? ownedIds(simulated, partner.id) : []
-    );
-    const reasons = [
-      `次タイトルの未達条件が${missingCount(beforeTitle)}件から${missingCount(afterTitle)}件になります`,
-      incomeMode === "pair"
-        ? `2名合計の総ボーナス概算が${incomeComparison.combined.grossDelta >= 0 ? "+" : ""}${incomeComparison.combined.grossDelta}円変化します`
-        : `総ボーナス概算が${bonusDelta.gross >= 0 ? "+" : ""}${bonusDelta.gross}円変化します`
-    ];
-    if (afterTitle.achievedTitle !== beforeTitle.achievedTitle) reasons.unshift(`${afterTitle.achievedTitle}条件に到達します`);
-    return {
-      placementMemberId: placement.id,
-      placementMemberName: placement.displayName,
-      eligible: true,
-      rank: null,
-      grossDelta: bonusDelta.gross,
-      estimatedNetDelta: bonusDelta.estimatedNet,
-      bonusDelta,
-      incomeComparison,
-      titleBefore: beforeTitle.achievedTitle,
-      titleAfter: afterTitle.achievedTitle,
-      missingBefore: missingCount(beforeTitle),
-      missingAfter: missingCount(afterTitle),
-      earliestAchievementPeriod: titleAtLeast(afterTitle.achievedTitle, request.targetTitle) ? request.period : null,
-      ownedIdCountBefore,
-      ownedIdCountAfter: ownedIds(simulated, root.id).length,
-      reasons,
-      warnings: [
-        "参考シミュレーションです。登録後の配置は公式サイトで確認してください",
-        ...(incomeMode === "pair" ? [PAIR_INCOME_WARNING] : []),
-        ...(request.idKind === "sub" ? ["自分のサブIDとして、そのIDで発生するボーナスをメインIDの収入へ合算しています。不要なサブID登録は行わないでください"] : []),
-        ...(request.trainerBonusRole && !trainerRoleEligible(root, request.trainerBonusRole) ? ["現在登録されているトレーナー資格では、このトレーナーボーナスは加算されません"] : []),
-        ...(request.trainerBonusRole ? ["Aさん役の報酬は、該当トレーナー資格を有し申請書へ記載される場合の初回購入時のみです"] : []),
-        ...(request.course === "I" && request.trainerBonusRole?.startsWith("ST") ? ["IコースはSトレーナー対象外のため、トレーナーボーナスは0円です"] : [])
-      ]
-    };
+    priorityCandidates.forEach((priority, priorityIndex) => {
+      const beforeTarget = titleTargetState(snapshot, priority.member.id, request.targetTitle);
+      const simulated = cloneWithCandidate(
+        snapshot, request, placement.id, `${placementIndex + 1}-${priorityIndex + 1}`, priority.member.id
+      );
+      const afterTarget = titleTargetState(simulated, priority.member.id, request.targetTitle);
+      const afterBonus = computeBonus(simulated, root.id, request.taxProfile);
+      const afterPartnerBonus = partner ? computeBonus(simulated, partner.id, request.taxProfile) : null;
+      const bonusDelta = compareBonusBreakdowns(beforeBonus, afterBonus);
+      const incomeComparison = placementIncomeComparison(
+        incomeMode, root, beforeBonus, afterBonus, partner, beforePartnerBonus, afterPartnerBonus,
+        ownedIds(simulated, root.id), partner ? ownedIds(simulated, partner.id) : []
+      );
+      const reasons = [
+        `${priority.member.displayName}の${request.targetTitle}未達条件が${beforeTarget.missing}件から${afterTarget.missing}件になります`,
+        incomeMode === "pair"
+          ? `2名合計の総ボーナス概算が${incomeComparison.combined.grossDelta >= 0 ? "+" : ""}${incomeComparison.combined.grossDelta}円変化します`
+          : `総ボーナス概算が${bonusDelta.gross >= 0 ? "+" : ""}${bonusDelta.gross}円変化します`
+      ];
+      if (!beforeTarget.reached && afterTarget.reached) reasons.unshift(`${priority.member.displayName}が${request.targetTitle}条件に到達します`);
+      else if (afterTarget.evaluation.achievedTitle !== beforeTarget.evaluation.achievedTitle) reasons.unshift(`${priority.member.displayName}が${afterTarget.evaluation.achievedTitle}条件に到達します`);
+      results.push({
+        placementMemberId: placement.id,
+        placementMemberName: placement.displayName,
+        eligible: true,
+        rank: null,
+        grossDelta: bonusDelta.gross,
+        estimatedNetDelta: bonusDelta.estimatedNet,
+        bonusDelta,
+        incomeComparison,
+        priorityMemberId: priority.member.id,
+        priorityMemberName: priority.member.displayName,
+        priorityMemberRole: priority.role,
+        targetTitle: request.targetTitle,
+        targetAchievedBefore: beforeTarget.reached,
+        targetAchievedAfter: afterTarget.reached,
+        titleBefore: beforeTarget.evaluation.achievedTitle,
+        titleAfter: afterTarget.evaluation.achievedTitle,
+        missingBefore: beforeTarget.missing,
+        missingAfter: afterTarget.missing,
+        earliestAchievementPeriod: !beforeTarget.reached && afterTarget.reached ? request.period : null,
+        ownedIdCountBefore,
+        ownedIdCountAfter: ownedIds(simulated, root.id).length,
+        reasons,
+        warnings: [
+          "タイトル最適化では、表示された優先IDが紹介者となる前提で比較しています",
+          "参考シミュレーションです。登録後の配置は公式サイトで確認してください",
+          ...(incomeMode === "pair" ? [PAIR_INCOME_WARNING] : []),
+          ...(request.idKind === "sub" ? ["自分のサブIDとして、そのIDで発生するボーナスをメインIDの収入へ合算しています。不要なサブID登録は行わないでください"] : []),
+          ...(request.trainerBonusRole && !trainerRoleEligible(root, request.trainerBonusRole) ? ["現在登録されているトレーナー資格では、このトレーナーボーナスは加算されません"] : []),
+          ...(request.trainerBonusRole ? ["Aさん役の報酬は、該当トレーナー資格を有し申請書へ記載される場合の初回購入時のみです"] : []),
+          ...(request.course === "I" && request.trainerBonusRole?.startsWith("ST") ? ["IコースはSトレーナー対象外のため、トレーナーボーナスは0円です"] : [])
+        ]
+      });
+    });
   });
-  const eligible = results.filter((item) => item.eligible).sort((a, b) => {
-    const targetA = a.earliestAchievementPeriod ? 0 : 1;
-    const targetB = b.earliestAchievementPeriod ? 0 : 1;
-    return targetA - targetB || a.missingAfter - b.missingAfter || b.incomeComparison.combined.grossDelta - a.incomeComparison.combined.grossDelta || a.placementMemberId.localeCompare(b.placementMemberId);
-  });
+  const eligible = results.filter((item) => item.eligible).sort(compareTitlePriorityResults);
+  if ((request.titlePriorityMode ?? "member") === "auto") {
+    const bestByPriority = new Map<string, PlacementResult>();
+    eligible.forEach((item) => {
+      if (!bestByPriority.has(item.priorityMemberId)) bestByPriority.set(item.priorityMemberId, item);
+    });
+    const compared = [...bestByPriority.values()].sort(compareTitlePriorityResults);
+    compared.forEach((item, index) => { item.rank = index + 1; });
+    return compared;
+  }
   eligible.forEach((item, index) => { item.rank = index + 1; });
   return results.sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER)).slice(0, 3);
 }
@@ -875,8 +957,18 @@ export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request:
   if (incomeMode === "pair" && (!partner || partner.id === root.id || partner.idKind !== "master" || partner.masterMemberId !== null || (partner.endedPeriod !== null && partner.endedPeriod <= snapshot.period))) {
     throw new Error("An active partner master ID is required for pair income simulation");
   }
-
-  const initialTitle = evaluateTitle(snapshot, root.id);
+  const recommendedPriority = (request.titlePriorityMode ?? "member") === "auto"
+    ? simulatePlacements(snapshot, { ...request, candidateName: `${request.candidateName}1` }).find((result) => result.eligible) ?? null
+    : null;
+  const selectedPriority = recommendedPriority
+    ? { member: snapshot.members.find((member) => member.id === recommendedPriority.priorityMemberId)!, role: recommendedPriority.priorityMemberRole }
+    : titlePriorityCandidates(snapshot, request, root)[0]!;
+  const effectiveRequest: BatchSimulationRequest = {
+    ...request,
+    titlePriorityMode: "member",
+    titlePriorityMemberId: selectedPriority.member.id
+  };
+  const initialTarget = titleTargetState(snapshot, selectedPriority.member.id, request.targetTitle);
   const initialBonus = computeBonus(snapshot, root.id, request.taxProfile);
   const initialPartnerBonus = partner ? computeBonus(snapshot, partner.id, request.taxProfile) : null;
   const ownedIdCountBefore = ownedIds(snapshot, root.id).length;
@@ -885,7 +977,7 @@ export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request:
 
   for (let index = 0; index < request.candidateCount; index += 1) {
     const candidateName = `${request.candidateName}${index + 1}`;
-    const stepRequest: SimulationRequest = { ...request, candidateName };
+    const stepRequest: SimulationRequest = { ...effectiveRequest, candidateName };
     const best = simulatePlacements(working, stepRequest).find((result) => result.eligible);
     if (!best) break;
 
@@ -896,13 +988,16 @@ export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request:
       collision += 1;
     }
     const candidateMemberId = `simulation-${suffix}`;
-    working = cloneWithCandidate(working, stepRequest, best.placementMemberId, suffix);
+    working = cloneWithCandidate(working, stepRequest, best.placementMemberId, suffix, best.priorityMemberId);
     steps.push({
       sequence: index + 1,
       candidateMemberId,
       candidateName,
       placementMemberId: best.placementMemberId,
       placementMemberName: best.placementMemberName,
+      priorityMemberId: best.priorityMemberId,
+      priorityMemberName: best.priorityMemberName,
+      priorityMemberRole: best.priorityMemberRole,
       titleBefore: best.titleBefore,
       titleAfter: best.titleAfter,
       missingBefore: best.missingBefore,
@@ -913,7 +1008,7 @@ export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request:
     });
   }
 
-  const finalTitle = evaluateTitle(working, root.id);
+  const finalTarget = titleTargetState(working, selectedPriority.member.id, request.targetTitle);
   const finalBonus = computeBonus(working, root.id, request.taxProfile);
   const finalPartnerBonus = partner ? computeBonus(working, partner.id, request.taxProfile) : null;
   const incomeComparison = placementIncomeComparison(
@@ -927,16 +1022,23 @@ export function simulateBatchPlacements(snapshot: OrganizationSnapshot, request:
     placedCount,
     unplacedCount: request.candidateCount - placedCount,
     steps,
-    titleBefore: initialTitle.achievedTitle,
-    titleAfter: finalTitle.achievedTitle,
-    missingBefore: missingCount(initialTitle),
-    missingAfter: missingCount(finalTitle),
+    priorityMemberId: selectedPriority.member.id,
+    priorityMemberName: selectedPriority.member.displayName,
+    priorityMemberRole: selectedPriority.role,
+    targetTitle: request.targetTitle,
+    targetAchievedBefore: initialTarget.reached,
+    targetAchievedAfter: finalTarget.reached,
+    titleBefore: initialTarget.evaluation.achievedTitle,
+    titleAfter: finalTarget.evaluation.achievedTitle,
+    missingBefore: initialTarget.missing,
+    missingAfter: finalTarget.missing,
     ownedIdCountBefore,
     ownedIdCountAfter: ownedIds(working, root.id).length,
     bonusDelta: compareBonusBreakdowns(initialBonus, finalBonus),
     incomeComparison,
     warnings: [
       "各1名を追加するたびに全配置候補を再計算する逐次最適配置です。全組合せの絶対的な最適解を保証するものではありません",
+      `${selectedPriority.member.displayName}が紹介者となり、${request.targetTitle}取得を優先する前提で配置しています`,
       "参考シミュレーションです。公式登録や現在の試算組織は、この計算だけでは変更されません",
       ...(incomeMode === "pair" ? [PAIR_INCOME_WARNING] : []),
       ...(placedCount < request.candidateCount ? [`配置上限またはサブID上限により${request.candidateCount - placedCount}人は配置できませんでした`] : [])

@@ -24,9 +24,11 @@ import {
   type DashboardData,
   type Goal,
   type Member,
+  type OrganizationSnapshot,
   type PurchaseEvent,
   type SavedForecast,
   type SimulationMember,
+  type SimulationRequest,
   type SimulationOrganization,
   type TitleChecklistData,
 } from "../src/shared/types";
@@ -114,6 +116,8 @@ const simulationInputSchema = z.object({
   trainerBonusRole: z.enum(["PT", "ST_SOLO", "ST_WITH_PT"]).nullable().default(null),
   incomeMode: z.enum(["self", "pair"]).default("self"),
   partnerMemberId: z.string().min(1).max(80).nullable().default(null),
+  titlePriorityMode: z.enum(["auto", "member"]).default("member"),
+  titlePriorityMemberId: z.string().min(1).max(120).nullable().default(null),
   taxProfile: taxProfileSchema
 });
 const validatePairIncome = (value: z.infer<typeof simulationInputSchema>, context: z.RefinementCtx) => {
@@ -133,6 +137,7 @@ const growthStorySimulationSchema = simulationInputSchema.extend({
 const simulationMemberSchema = z.object({
   displayName: z.string().trim().min(1).max(80),
   parentMemberId: z.string().min(1).max(80),
+  introducerMemberId: z.string().min(1).max(120).optional(),
   period: periodSchema,
   course: courseSchema,
   idKind: z.enum(["master", "sub"]).default("master"),
@@ -170,6 +175,22 @@ const trainerProfileSchema = z.object({
   startTrainerCourseCompleted: z.boolean(),
   startTrainerKitPurchased: z.boolean()
 });
+
+function invalidTitlePriorityMember(
+  snapshot: OrganizationSnapshot,
+  request: Pick<SimulationRequest, "titlePriorityMode" | "titlePriorityMemberId" | "partnerMemberId">
+): boolean {
+  if ((request.titlePriorityMode ?? "member") === "auto") return false;
+  const root = snapshot.members.find((member) => member.parentMemberId === null);
+  if (!root) return true;
+  const selectedId = request.titlePriorityMemberId ?? root.id;
+  const allowedIds = new Set(ownedIds(snapshot, root.id).map((member) => member.id));
+  const partner = request.partnerMemberId
+    ? snapshot.members.find((member) => member.id === request.partnerMemberId && member.idKind === "master" && member.masterMemberId === null && member.id !== root.id && (member.endedPeriod === null || member.endedPeriod > snapshot.period))
+    : null;
+  if (partner) ownedIds(snapshot, partner.id).forEach((member) => allowedIds.add(member.id));
+  return !allowedIds.has(selectedId);
+}
 
 const forecastScenarioSchema = z.object({
     id: z.enum(["conservative", "standard", "challenge"]),
@@ -346,7 +367,9 @@ app.post("/api/v1/simulation-members", async (context) => {
   const root = snapshot.members.find((member) => member.parentMemberId === null);
   if (!root) return context.json({ error: "ルート会員が登録されていません" }, 409);
   const parent = snapshot.members.find((member) => member.id === input.parentMemberId && member.endedPeriod === null);
+  const introducer = snapshot.members.find((member) => member.id === (input.introducerMemberId ?? root.id) && member.endedPeriod === null);
   if (!parent) return context.json({ error: "配置先が存在しません" }, 400);
+  if (!introducer) return context.json({ error: "紹介者が存在しません" }, 400);
   if (snapshot.members.filter((member) => member.parentMemberId === parent.id && member.endedPeriod === null).length >= planConfig.firstLineLimit) {
     return context.json({ error: "配置先の1次ラインが上限7名です" }, 400);
   }
@@ -358,7 +381,7 @@ app.post("/api/v1/simulation-members", async (context) => {
     workspaceId,
     displayName: input.displayName,
     parentMemberId: parent.id,
-    introducerMemberId: root.id,
+    introducerMemberId: introducer.id,
     masterMemberId: input.idKind === "sub" ? root.id : null,
     trainerMemberId: input.trainerBonusRole ? root.id : null,
     trainerBonusRole: input.trainerBonusRole,
@@ -608,6 +631,9 @@ app.post("/api/v1/simulations", async (context) => {
     listSimulationMembers(context.env.DB, workspaceId, request.period)
   ]);
   const snapshot = applySimulationMembers(actual, simulationMembers);
+  if (invalidTitlePriorityMember(snapshot, request)) {
+    return context.json({ error: "タイトル優先対象は本人・パートナーまたは双方の保有サブIDから選択してください" }, 400);
+  }
   if (request.incomeMode === "pair") {
     const root = snapshot.members.find((member) => member.parentMemberId === null);
     const partner = snapshot.members.find((member) => member.id === request.partnerMemberId);
@@ -625,6 +651,9 @@ app.post("/api/v1/simulations/batch", async (context) => {
     listSimulationMembers(context.env.DB, workspaceId, request.period)
   ]);
   const snapshot = applySimulationMembers(actual, simulationMembers);
+  if (invalidTitlePriorityMember(snapshot, request)) {
+    return context.json({ error: "タイトル優先対象は本人・パートナーまたは双方の保有サブIDから選択してください" }, 400);
+  }
   if (request.incomeMode === "pair") {
     const root = snapshot.members.find((member) => member.parentMemberId === null);
     const partner = snapshot.members.find((member) => member.id === request.partnerMemberId);
