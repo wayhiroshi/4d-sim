@@ -272,6 +272,24 @@ function TreeNode({ member, snapshot, simulationIds, depth, selectedId, onSelect
   </div>;
 }
 
+function SimulatorOrganizationNode({ member, snapshot, simulationIds, depth }: { member: Member; snapshot: OrganizationSnapshot; simulationIds: Set<string>; depth: number }) {
+  const [expanded, setExpanded] = useState(true);
+  const children = snapshot.members.filter((item) => item.parentMemberId === member.id);
+  const childrenId = `simulator-tree-children-${member.id}`;
+  const pv = snapshot.purchases
+    .filter((purchase) => purchase.memberId === member.id && purchase.period === snapshot.period)
+    .filter((purchase) => !simulationIds.has(member.id) || purchase.kind !== "initial")
+    .reduce((sum, purchase) => sum + purchase.pv * purchase.quantity, 0);
+  return <div className="tree-branch simulator-tree-branch" style={{ "--depth": depth } as React.CSSProperties}>
+    <div className={`member-node simulator-member-node${simulationIds.has(member.id) ? " simulation" : ""}`}>
+      <span className={`course course-${member.course}`}>{member.course}</span>
+      <span className="member-node-content"><strong>{member.displayName}{member.idKind === "sub" && <em className="trial-tag">サブ</em>}{simulationIds.has(member.id) && <em className="trial-tag">仮</em>}</strong><small>{number.format(pv)} p.v. ・ {member.title}</small></span>
+      {children.length > 0 && <button type="button" className={`simulator-tree-toggle${expanded ? " expanded" : ""}`} aria-expanded={expanded} aria-controls={childrenId} aria-label={`${member.displayName}の配下${children.length}人を${expanded ? "閉じる" : "開く"}`} onClick={() => setExpanded((current) => !current)}><small>{children.length}人</small><b>⌄</b></button>}
+    </div>
+    {children.length > 0 && expanded && <div className="tree-children" id={childrenId}>{children.map((child) => <SimulatorOrganizationNode key={child.id} member={child} snapshot={snapshot} simulationIds={simulationIds} depth={depth + 1} />)}</div>}
+  </div>;
+}
+
 function MemberDetail({ member, snapshot, simulation = false, simulationIds, rootMemberId, onUpdated, onDeleted }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean; simulationIds: Set<string>; rootMemberId: string | null; onUpdated: (displayName: string, idKind: IdKind) => void; onDeleted: (displayName: string) => void }) {
   const purchases = snapshot.purchases.filter((purchase) => purchase.memberId === member.id).slice(-5).reverse();
   const [editing, setEditing] = useState(false); const [displayName, setDisplayName] = useState(member.displayName); const [idKind, setIdKind] = useState<IdKind>(member.idKind); const [masterMemberId, setMasterMemberId] = useState(member.masterMemberId ?? rootMemberId ?? ""); const [parentMemberId, setParentMemberId] = useState(member.parentMemberId ?? ""); const [saving, setSaving] = useState(false); const [confirmingDelete, setConfirmingDelete] = useState(false); const [editError, setEditError] = useState<string | null>(null);
@@ -354,6 +372,9 @@ function Simulator() {
   const [startingMemberId, setStartingMemberId] = useState("");
   const [candidate, setCandidate] = useState<{ name: string; course: CourseCode; idKind: IdKind; trainerBonusRole: TrainerBonusRole | null } | null>(null);
   const snapshot = tree.data?.snapshot ?? null;
+  const simulationIds = useMemo(() => new Set(tree.data?.simulationMembers.map((member) => member.id) ?? []), [tree.data]);
+  const simulationMemberCount = tree.data?.simulationMembers.length ?? 0;
+  const actualMemberCount = Math.max(0, (snapshot?.members.length ?? 0) - simulationMemberCount);
   const rootMember = snapshot?.members.find((member) => member.parentMemberId === null) ?? null;
   const ownedSubIds = snapshot?.members.filter((member) => member.idKind === "sub" && member.masterMemberId === rootMember?.id && (member.endedPeriod === null || member.endedPeriod > snapshot.period)) ?? [];
   const partnerOptions = snapshot?.members.filter((member) => member.id !== rootMember?.id && member.idKind === "master" && member.masterMemberId === null && (member.endedPeriod === null || member.endedPeriod > snapshot.period) && !member.id.startsWith("trial-")) ?? [];
@@ -447,7 +468,8 @@ function Simulator() {
 
   return <PageState loading={tree.loading || tax.loading || goal.loading} error={tree.error || tax.error || goal.error}>{snapshot && <>
     <PageHeading kicker="PLACEMENT QUEST" title="配置シミュレーター" description="人数と条件を選び、配置後のタイトルと報酬を比較します" />
-    <section className="trial-banner"><div><strong>現在の試算組織：{tree.data?.simulationMembers.length ?? 0}人</strong><small>保存済みの仮メンバーを含めて再計算します。</small></div><NavLink to="/organization" className="text-button">組織を確認</NavLink></section>
+    <section className="trial-banner"><div><strong>計算に使う現在の組織：{snapshot.members.length}人</strong><small>実組織{actualMemberCount}人＋仮メンバー{simulationMemberCount}人。現在のアップと配下関係をそのまま試算に使います。</small></div><NavLink to="/organization" className="text-button">組織を編集</NavLink></section>
+    <details className="panel simulator-organization-preview" open><summary><div><span className="preview-icon">⌘</span><div><strong>試算の基準にする組織図</strong><small>{snapshot.period}度 ・ {snapshot.members.length}人を反映中</small></div></div><b>開閉</b></summary><div className="simulator-tree"><p>この組織図に新しい人を仮配置し、すべての配置先候補を再計算します。結果画面には、各タイトル優先IDの最上位案を表示します。</p>{snapshot.members.filter((member) => member.parentMemberId === null).map((root) => <SimulatorOrganizationNode key={root.id} member={root} snapshot={snapshot} simulationIds={simulationIds} depth={0} />)}</div></details>
 
     <form className="panel simulator-workflow" onSubmit={(event) => void submit(event)}>
       <header className="simulator-workflow-heading"><div><span>1</span><div><strong>試算のストーリー</strong><small>増え方の違いを同じ報酬ルールで比較します</small></div></div></header>
