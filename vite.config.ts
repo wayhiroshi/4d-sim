@@ -24,7 +24,7 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: "/index.html",
-        navigateFallbackDenylist: [/^\/api\//, /^\/cdn-cgi\//],
+        navigateFallbackDenylist: [/^\/api\//, /^\/cdn-cgi\//, /^\/guide\/[^/]+\.png$/],
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.pathname.startsWith("/api/"),

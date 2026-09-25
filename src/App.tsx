@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import StrategyStudio, { StrategyOverlay } from "./StrategyStudio";
+import QuickGuide from "./QuickGuide";
 import { api } from "./api";
 import { descendantMemberIds } from "./domain/placement";
 import {
@@ -103,6 +104,7 @@ function Layout() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/reference/titles" element={<TitleReference />} />
           <Route path="/more" element={<More />} />
+          <Route path="/guide" element={<QuickGuide />} />
         </Routes>
       </main>
       <nav className="bottom-nav" aria-label="メインナビゲーション">
@@ -721,7 +723,7 @@ function TitleReference() {
   </>}</PageState>;
 }
 
-function More() { return <><PageHeading kicker="TOOLS" title="その他" description="試算に使う設定とマスタ" /><div className="menu-grid"><NavLink to="/products"><span>▦</span><strong>商品マスタ</strong><small>価格・p.v.自動計算</small></NavLink><NavLink to="/imports"><span>⇩</span><strong>CSV取り込み</strong><small>会員・月次購入</small></NavLink><NavLink to="/settings"><span>⚙</span><strong>設定</strong><small>目標・概算条件</small></NavLink></div><section className="panel reference-tools"><p className="eyebrow">REFERENCE</p><h2>参考機能</h2><NavLink to="/reference/titles"><span>一覧</span><div><strong>全タイトル条件</strong><small>各タイトルの条件表と現在の不足を確認</small></div><b>›</b></NavLink></section><section className="panel about-card"><h2>このアプリについて</h2><p>組織、タイトル、報酬、配置、将来条件の試算を行う、非公式の個人用シミュレーターです。公式サイトへの自動ログイン、登録、購入は行いません。</p><p>人物・関係性・フォローの管理は「つながりカルテ」で行い、Navigatorには保存しません。将来連携する場合も、試算に必要な最小限のデータだけを受け取ります。</p></section></>; }
+function More() { return <><PageHeading kicker="TOOLS" title="その他" description="試算に使う設定とマスタ" /><NavLink className="guide-menu-link" to="/guide"><strong>画像でわかる使い方 →</strong><small>配置変更・金額比較・保存を3分で確認</small></NavLink><div className="menu-grid"><NavLink to="/products"><span>▦</span><strong>商品マスタ</strong><small>価格・p.v.自動計算</small></NavLink><NavLink to="/imports"><span>⇩</span><strong>CSV取り込み</strong><small>会員・月次購入</small></NavLink><NavLink to="/settings"><span>⚙</span><strong>設定</strong><small>目標・概算条件</small></NavLink></div><section className="panel reference-tools"><p className="eyebrow">REFERENCE</p><h2>参考機能</h2><NavLink to="/reference/titles"><span>一覧</span><div><strong>全タイトル条件</strong><small>各タイトルの条件表と現在の不足を確認</small></div><b>›</b></NavLink></section><section className="panel about-card"><h2>このアプリについて</h2><p>組織、タイトル、報酬、配置、将来条件の試算を行う、非公式の個人用シミュレーターです。公式サイトへの自動ログイン、登録、購入は行いません。</p><p>人物・関係性・フォローの管理は「つながりカルテ」で行い、Navigatorには保存しません。将来連携する場合も、試算に必要な最小限のデータだけを受け取ります。</p></section></>; }
 
 function PageHeading({ kicker, title, description, action }: { kicker: string; title: string; description: string; action?: ReactNode }) { return <div className="page-heading"><div><p className="eyebrow">{kicker}</p><h1>{title}</h1><p>{description}</p></div>{action}</div>; }
 
