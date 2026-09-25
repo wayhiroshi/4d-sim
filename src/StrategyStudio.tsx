@@ -6,6 +6,8 @@ import { planConfig } from "./domain/plan";
 import { COURSES, TITLE_ORDER, type OrganizationSnapshot } from "./shared/types";
 import type { StrategyProgress } from "./domain/strategy";
 import StrategyCanvas, { type Comparison } from "./StrategyCanvas";
+import TeamPotentialField from "./TeamPotentialField";
+import OrganizationResultTree from "./OrganizationResultTree";
 import "./strategy.css";
 
 const money = (value: number) => `${Math.round(value).toLocaleString("ja-JP")}円`;
@@ -41,7 +43,7 @@ export function Income({ row, title = "報酬の内訳" }: { row: StrategyMonth;
   </details>;
 }
 function OrganizationSummary({ nodes }: { nodes: StrategyNode[] }) {
-  return <div className="studio-tree">{nodes.map((node) => <details key={node.id} style={{ marginLeft: `${Math.min(node.depth, 3) * 12}px` }}><summary><span>{node.name} <small>{node.ownerId ? "サブ" : node.depth === 0 ? "メイン" : "チーム"}</small></span><strong>{node.title} · {number(node.active)} ID</strong></summary><p>配置親：{nodes.find((n) => n.id === node.parentId)?.name ?? node.parentId ?? "なし"}<br/>紹介者：{nodes.find((n) => n.id === node.introducerId)?.name ?? node.introducerId ?? "なし"}<br/>配下在籍：{number(node.count)} ID ／ {node.course}コース</p></details>)}</div>;
+  return <OrganizationResultTree nodes={nodes}/>;
 }
 function Chart({ variants, band, selected }: { variants: StrategySimulationResult["variants"]; band: Band; selected: Objective }) {
   const [metric, setMetric] = useState<"count" | "recurring" | "cumulative">("count");
@@ -180,6 +182,7 @@ export default function StrategyStudio() {
         {!leader.existingMemberId && <label>リーダー本人の加入コース<select value={leader.leaderCourse} onChange={(e) => updateLeader(leader.id, { leaderCourse: e.target.value as typeof leader.leaderCourse })}>{COURSES.map((c) => <option key={c}>{c}</option>)}</select></label>}
         <label>完成形の人数配分の重み<input type="number" min="0" max="100" step="0.1" value={leader.targetWeight} onChange={(e) => updateLeader(leader.id, { targetWeight: Number(e.target.value) })}/><small>同じ重みなら追加人数を均等配分。0は現状人数までです。全前提でこの配分を固定します。</small></label>
         <label>チームのライセンス取得予定（加入後の月数）<input type="number" min="0" placeholder="未設定" value={leader.licenseAfterMonths ?? ""} onChange={(e) => updateLeader(leader.id, { licenseAfterMonths: e.target.value === "" ? null : Number(e.target.value) })}/></label></div>
+        <TeamPotentialField value={leader.potentialDownlineIds} minimum={leader.initialTeam} disabled={busy} change={potentialDownlineIds => updateLeader(leader.id, { potentialDownlineIds })}/>
         {leader.phases.map((phase, pi) => { const set = (patch: Partial<typeof phase>) => updateLeader(leader.id, { phases: leader.phases.map((p, i) => i === pi ? { ...p, ...patch } : p) }); return <section className="studio-phase" key={pi}><div className="studio-form"><label>期間の開始月<input type="number" value={phase.fromMonth} onChange={(e) => set({ fromMonth: Number(e.target.value) })}/></label><label>終了月（空欄=継続）<input type="number" value={phase.toMonth ?? ""} onChange={(e) => set({ toMonth: e.target.value ? Number(e.target.value) : null })}/></label><label>新規のコース<select value={phase.course} onChange={(e) => set({ course: e.target.value as typeof phase.course })}>{COURSES.map((c) => <option key={c}>{c}</option>)}</select></label><label>配下が紹介を始めるまで（月）<input type="number" min="1" value={phase.recruitmentDelay} onChange={(e) => set({ recruitmentDelay: Number(e.target.value) })}/></label><label>配下1人が紹介する累計上限<input type="number" min="0" value={phase.maxPerMember} onChange={(e) => set({ maxPerMember: Number(e.target.value) })}/></label><label>1 IDあたり追加p.v. / 月<input type="number" min="0" value={phase.additionalPv} onChange={(e) => set({ additionalPv: Number(e.target.value) })}/></label></div>
         <div className="studio-bands">{BANDS.map((b) => <fieldset key={b}><legend>{labels[b]}</legend>{([
           ["introductions", "リーダー自身の紹介 / 月", 1], ["activity", "配下の紹介活動率（％）", 100], ["perRecruiter", "活動する人の紹介 / 月", 1], ["retention", "月次購入継続率（％）", 100], ["exitRate", "月次退会率（％）", 100], ["reactivation", "休止者の月次再開率（％）", 100]

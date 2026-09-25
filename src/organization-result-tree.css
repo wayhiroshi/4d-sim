@@ -1,0 +1,18 @@
+.organization-result-tree { margin: 12px 0; min-width: 0; }
+.organization-result-tree .result-tree-legend { font-size: 12px; line-height: 1.65; color: #526860; margin: 8px 0 14px; }
+.organization-result-tree ul { list-style: none; padding: 0; margin: 0; }
+.organization-result-tree li { min-width: 0; position: relative; }
+.organization-result-tree li > ul { margin: 0 0 8px 16px; padding: 8px 0 0 16px; border-left: 1px solid #a7c4b6; }
+.organization-result-tree li > ul > li::before { content: ""; position: absolute; left: -16px; top: 23px; width: 16px; border-top: 1px solid #a7c4b6; }
+.organization-result-tree li > ul[hidden] { display: none; }
+.organization-result-tree .result-tree-node { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 48px; border: 1px solid #d9e2df; border-radius: 8px; background: #f6faf7; padding: 10px 8px; text-align: left; color: #18352e; box-sizing: border-box; margin: 0 0 6px; }
+.organization-result-tree .result-tree-node > span:last-child { min-width: 0; flex: 1; }
+.organization-result-tree .result-tree-toggle { width: 18px; flex-shrink: 0; text-align: center; color: #17654f; }
+.organization-result-tree .result-tree-name { display: block; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.organization-result-tree .result-tree-name strong { color: #17654f; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.organization-result-tree .result-tree-meta { display: flex; flex-wrap: wrap; gap: 3px 10px; color: #526860; font-size: 12px; margin-top: 3px; }
+.organization-result-tree .result-tree-group { padding: 12px 8px; font-size: 13px; overflow-wrap: anywhere; }
+.organization-result-tree .result-tree-group small { display: block; color: #526860; font-size: 11px; margin-top: 3px; }
+.organization-result-tree .result-tree-detached { border-top: 1px dashed #a7c4b6; padding-top: 12px; margin-top: 12px; }
+.organization-result-tree .result-tree-detached p { font-size: 12px; }
+@media(max-width:760px) { .organization-result-tree li > ul { margin-left: 8px; padding-left: 10px; } .organization-result-tree li > ul > li::before { left: -10px; width: 10px; } }

@@ -13,7 +13,7 @@ export function comparisonPoint(result: StrategyVariantResult | undefined, input
 /** Exclude labels and placement-only changes, not growth/qualification/tax assumptions. */
 export function sameGrowthAssumptions(a: StrategySimulationRequest, b: StrategySimulationRequest): boolean {
   const normalize = (x: StrategySimulationRequest) => ({ ...x, name: "", placementOverrides: {},
-    leaders: x.leaders.map(l => ({ ...l, name: "", placementId: "" })) });
+    leaders: x.leaders.map(({ potentialDownlineIds, ...l }) => ({ ...l, name: "", placementId: "", potentialDownlineIds: potentialDownlineIds ?? null })) });
   return JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
 }
 

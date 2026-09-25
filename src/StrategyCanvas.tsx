@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
-import { BANDS, CHECKPOINTS, type Band, type LeaderGrowthProfile, type StrategySimulationRequest, type StrategySimulationResult, type StrategyMonth } from "./shared/strategy";
+import { BANDS, CHECKPOINTS, defaultPhase, type Band, type LeaderGrowthProfile, type StrategySimulationRequest, type StrategySimulationResult, type StrategyMonth } from "./shared/strategy";
 import type { OrganizationSnapshot } from "./shared/types";
 import { movePlacement, placementError, placementNodes } from "./domain/strategy-placement";
 import { comparisonPoint, incomeDifferences, sameGrowthAssumptions, type ComparisonBasis } from "./domain/strategy-comparison";
 import { Income } from "./StrategyStudio";
+import TeamPotentialField from "./TeamPotentialField";
+import OrganizationResultTree from "./OrganizationResultTree";
 import "./strategy-canvas.css";
 
 const yen = (v: number) => `${Math.round(v).toLocaleString("ja-JP")}円`;
@@ -89,6 +91,7 @@ export default function StrategyCanvas(p: Props) {
   function branch(id: string, seen = new Set<string>()): React.ReactNode {
     if (seen.has(id)) return null;
     const node = nodes.find(n => n.id === id); if (!node) return null;
+    const potential = input.leaders.find(l => l.id === node.leaderId)?.potentialDownlineIds;
     const children = nodes.filter(n => n.parentId === id);
     const sourceId = dragging;
     const reason = sourceId ? placementError(nodes, sourceId, id, input.rootId) : null;
@@ -107,7 +110,7 @@ export default function StrategyCanvas(p: Props) {
           onPointerUp={e => { const d = pointerDrag.current; pointerDrag.current = null; if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-node-id]")?.dataset.nodeId; if (d?.moved && target && target !== id) move(id, target); else { setSelected(id); setMoveTarget(""); } setDragging(null); setHover(null); }}
           onPointerCancel={() => { pointerDrag.current = null; setDragging(null); setHover(null); }}
           onClick={() => { setSelected(id); setMoveTarget(""); }}>⠿</button>}
-        <button className="canvas-person" aria-pressed={selected === id} onClick={() => { setSelected(id); setMoveTarget(""); setError(""); }}><strong>{node.name}</strong><span>{id === input.rootId ? "自分 · メイン" : node.sub ? `${nodes.find(n => n.id === node.ownerId)?.name ?? "所有者"}のサブ` : id === input.partnerId ? "パートナー" : node.planned ? "追加予定チーム" : "登録済み"}{changed ? " · 配置変更" : ""}</span></button>
+        <button className="canvas-person" aria-pressed={selected === id} onClick={() => { setSelected(id); setMoveTarget(""); setError(""); }}><strong>{node.name}</strong><span>{id === input.rootId ? "自分 · メイン" : node.sub ? `${nodes.find(n => n.id === node.ownerId)?.name ?? "所有者"}のサブ` : id === input.partnerId ? "パートナー" : node.planned ? "追加予定チーム" : "登録済み"}{changed ? " · 配置変更" : ""}</span>{potential != null && <small>配下の想定 {potential.toLocaleString()} ID</small>}</button>
         {sourceId && hover === id && <small className="canvas-drop-reason">{reason ?? "ここへチームごと移動"}</small>}
       </div>
       {!folded.has(id) && children.length > 0 && <ul>{children.map(child => branch(child.id, new Set([...seen, id])))}</ul>}
@@ -124,6 +127,12 @@ export default function StrategyCanvas(p: Props) {
         {active && <section className="canvas-inspector" aria-label="選択したメンバー"><div className="canvas-section-heading"><h3>{active.name}</h3><button onClick={() => setSelected(null)} aria-label="選択を閉じる">×</button></div><p>紹介者：{nodes.find(n => n.id === active.introducerId)?.name ?? "なし"}（配置を動かしても変わりません）</p>
           {active.id !== input.rootId && <div className="canvas-move"><label>配置先を変更<select aria-label="移動先" value={moveTarget} disabled={p.busy || viewBefore} onChange={e => setMoveTarget(e.target.value)}><option value="">移動先を選ぶ</option>{nodes.map(n => { const reason = placementError(nodes, active.id, n.id, input.rootId); return <option key={n.id} value={n.id} disabled={!!reason}>{n.name}{reason ? ` · ${reason}` : ""}</option>; })}</select></label><button disabled={!moveTarget || p.busy || viewBefore} onClick={() => move(active.id, moveTarget)}>ここへ移動</button></div>}
           {leader && <div className="canvas-fields"><label>チーム名<input key={`${leader.id}-${leader.name}`} defaultValue={leader.name} maxLength={80} disabled={p.busy || viewBefore} onBlur={e => { const name = e.target.value.trim() || "試算"; if (name !== leader.name) updateLeader({ name }); }}/></label><label>一緒に加入する人数<NumberField key={`team-${leader.id}`} value={leader.initialTeam} min={0} max={2000} disabled={p.busy || viewBefore || !!leader.existingMemberId} change={n => updateLeader({ initialTeam: n })}/></label><label>加入・成長開始（月後）<NumberField key={`start-${leader.id}`} value={leader.startMonth} min={1} max={12000} disabled={p.busy || viewBefore} change={n => updateLeader({ startMonth: n })}/></label></div>}
+          {leader && <TeamPotentialField key={leader.id} value={leader.potentialDownlineIds} minimum={leader.initialTeam} disabled={p.busy || viewBefore} change={potentialDownlineIds => updateLeader({ potentialDownlineIds })}/>}
+          {!leader && !active.sub && !active.planned && <><button disabled={p.busy || viewBefore || input.leaders.length >= 12} onClick={() => commit({ ...p.input, leaders: [...p.input.leaders, {
+            id: `growth-${active.id}`, name: active.name, existingMemberId: active.id, introducerId: active.introducerId ?? input.rootId, placementId: active.id,
+            startMonth: 1, initialTeam: 0, leaderCourse: p.base.members.find(m => m.id === active.id)?.course ?? "G", targetWeight: 1, licenseAfterMonths: null,
+            phases: structuredClone(input.leaders.find(l => l.existingMemberId === input.rootId)?.phases ?? [defaultPhase()])
+          }] })}>この人の成長・ポテンシャルを設定</button><p className="canvas-hint">個別の成長前提として設定します（最大12チーム）。</p></>}
           <p className="canvas-hint">既存IDの移動も仮定上の比較です。公式の配置変更は行いません。</p>
         </section>}
       </section>
@@ -134,7 +143,7 @@ export default function StrategyCanvas(p: Props) {
         <div className="canvas-outcome-stats"><div><span>{input.targetTitle}到達まで</span><strong>{stale ? "—" : time(variant?.titleMonth)}</strong></div><div><span>{endpoint ? "到達時の組織人数" : "この時点の組織人数"}</span><strong>{outcome ? `${outcome.count.toLocaleString()} ID` : "—"}</strong></div><div><span>購入費控除後の参考月額</span><strong>{outcome ? yen(outcome.recurringCashflow) : "—"}</strong></div></div>
         {!stale && !endpoint && <p className="canvas-hint">{input.goalBasis !== "title" ? "旧形式の保存結果です。TRD基準への切替は前提・詳細設定から行えます。" : `${input.horizonMonths / 12}年の計算範囲では${input.targetTitle}に未到達です。途中の月額は下の比較で確認できます。`}</p>}
         {outcome && <Income row={outcome} title="各ID・ボーナス内訳"/>}
-        {!stale && variant && <details className="canvas-final-details"><summary>{endpoint ? "到達時の組織を見る" : "計算終了時の組織を見る"}</summary><p className="canvas-hint">{endpoint ? "主要IDとチームを集約表示" : `${time(variant.months.at(-1)?.month)}時点。`}</p><div className="canvas-final-tree">{variant.finalOrganization.map(n => <div key={n.id} style={{ paddingLeft: `${Math.min(n.depth, 4) * 10}px` }}><strong>{n.name}</strong><span>{n.title === "NONE" ? "未取得" : n.title} · 配下 {n.active.toLocaleString()} ID</span><small>配置先：{variant.finalOrganization.find(x => x.id === n.parentId)?.name ?? (n.parentId ? "上位チーム" : "なし")}</small></div>)}</div></details>}
+        {!stale && variant && <details className="canvas-final-details"><summary>{endpoint ? "到達時の組織を見る" : "計算終了時の組織を見る"}</summary><p className="canvas-hint">{endpoint ? "主要IDとチームを集約表示" : `${time(variant.months.at(-1)?.month)}時点。`}</p><OrganizationResultTree nodes={variant.finalOrganization}/></details>}
         {!stale && !endpoint && variant && <details><summary>{input.targetTitle}までの不足条件</summary><ul>{variant.months.at(-1)?.missing.map(s => <li key={s}>{s}</li>)}</ul><button disabled={p.busy || viewBefore || input.horizonMonths >= 12000} onClick={() => commit({ ...p.input, horizonMonths: Math.min(12000, p.input.horizonMonths + 120) })}>さらに10年先まで計算</button></details>}
         {!stale && endpoint && <p className="canvas-hint">到達後12か月の平均参考月額：{variant?.postCompletionAverage == null ? "未算出" : yen(variant.postCompletionAverage)}。目標タイトル未維持：{variant?.maintenanceFailures}か月。</p>}
         {!stale && !!variant?.warnings.length && <details><summary>計算の前提・補足</summary><ul>{variant.warnings.map(w => <li key={w}>{w}</li>)}</ul></details>}

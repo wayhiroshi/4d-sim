@@ -21,6 +21,55 @@ function simulate(base: OrganizationSnapshot, request: StrategySimulationRequest
 }
 
 describe("Strategy Studio monthly engine", () => {
+  it.each([0, 100, 250, 300])("caps the entire downline at %i rather than giving that capacity to every recruiter", (potential) => {
+    const { base, request } = fixture();
+    const leader = request.leaders[0]!;
+    leader.potentialDownlineIds = potential;
+    const phase = leader.phases[0]!;
+    phase.recruitmentDelay = 1;
+    phase.rates.standard = { introductions: 30, activity: 1, perRecruiter: 3, retention: 1, exitRate: 0, reactivation: 0 };
+    const before = JSON.stringify({ base, request });
+    const r = simulate(base, request);
+    expect(r.months[1]!.count).toBe(Math.min(30, potential) + 1);
+    expect(r.months.at(-1)!.count).toBe(potential + 1);
+    expect(r.finalOrganization.find(n => n.id === "strategy-leader")?.count).toBe(potential);
+    expect(JSON.stringify({ base, request })).toBe(before);
+  });
+  it("preserves old uncapped requests and validates contradictory starting teams", () => {
+    const { base, request } = fixture();
+    expect(simulate(base, request)).toEqual(simulate(base, { ...request, leaders: request.leaders.map(l => ({ ...l, potentialDownlineIds: null })) }));
+    const bad = (n: number) => ({ ...request, leaders: request.leaders.map(l => ({ ...l, potentialDownlineIds: n })) });
+    for (const n of [-1, 1.5, 5001]) expect(strategyRequestSchema.safeParse(bad(n)).success).toBe(false);
+    request.leaders[0]!.initialTeam = 11;
+    expect(strategyRequestSchema.safeParse(bad(10)).success).toBe(false);
+    expect(strategyRequestSchema.safeParse(bad(11)).success).toBe(true);
+  });
+  it("shares an ancestor's potential with nested teams, without changing the other branch", () => {
+    const { base, request } = fixture();
+    request.placementMode = "manual";
+    const first = request.leaders[0]!;
+    first.potentialDownlineIds = 10;
+    first.phases[0]!.rates.standard.introductions = 2;
+    request.leaders.push({ ...structuredClone(first), id: "nested", name: "子チーム", placementId: "strategy-leader", potentialDownlineIds: 100 });
+    request.leaders.push({ ...structuredClone(first), id: "other", name: "別チーム", potentialDownlineIds: 15 });
+    const r = simulate(base, request);
+    expect(r.finalOrganization.find(n => n.id === "strategy-leader")?.count).toBe(10);
+    expect(r.finalOrganization.find(n => n.id === "strategy-other")?.count).toBe(15);
+    expect(r.months.at(-1)!.count).toBe(27);
+  });
+  it("counts inactive IDs toward potential and preserves existing oversized teams", () => {
+    const { base, request } = fixture();
+    request.leaders[0]!.potentialDownlineIds = 5;
+    request.leaders[0]!.phases[0]!.rates.standard.retention = 0.5;
+    const r = simulate(base, request);
+    expect(Math.max(...r.months.map(m => m.enrolled))).toBeLessThanOrEqual(6);
+    expect(r.months.at(-1)!.inactive).toBeGreaterThan(0);
+    base.members.push(...Array.from({ length: 3 }, (_, i) => blankMember(`existing-${i}`, "root", base.workspaceId, base.period)));
+    request.leaders[0] = { ...request.leaders[0]!, existingMemberId: "root", placementId: "root", potentialDownlineIds: 1 };
+    const oversized = simulate(base, request);
+    expect(oversized.months.at(-1)!.enrolled).toBe(3);
+    expect(oversized.warnings.some(w => w.includes("既存IDは減らさず"))).toBe(true);
+  });
   it("preserves the official 1,868 and 800 yen line golden cases with indexed calculations", () => {
     const { base, request } = fixture();
     base.members.push({ ...blankMember("g", "root", "demo", base.period), course: "G" }, blankMember("a", "g", "demo", base.period));
