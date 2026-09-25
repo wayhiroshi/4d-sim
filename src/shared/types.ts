@@ -61,7 +61,15 @@ export interface PlanConfig {
   businessMonthStartDay: number;
   firstLineLimit: number;
   maxSubIdsPerMaster: number;
-  compression: { enabled: boolean; promoteEndedMembers: boolean; firstLineMayExceedLimit: boolean };
+  compression: {
+    enabled: boolean;
+    trigger: "sub-id-deletion";
+    promoteEndedMembers: boolean;
+    promotedLevels: 1;
+    firstLineMayExceedLimit: boolean;
+    newPlacementLimitStillApplies: boolean;
+    sourceStatus: "user-provided";
+  };
   courses: Record<CourseCode, CourseRule>;
   trainerBonuses: Record<CourseCode, Record<TrainerBonusRole, number>>;
   trainerQualifications: Record<Exclude<TrainerCredential, "NONE">, {

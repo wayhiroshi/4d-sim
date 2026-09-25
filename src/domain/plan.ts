@@ -63,7 +63,15 @@ const planSchema = z.object({
   businessMonthStartDay: z.number().int().min(1).max(28),
   firstLineLimit: z.number().int().positive(),
   maxSubIdsPerMaster: z.number().int().positive(),
-  compression: z.object({ enabled: z.boolean(), promoteEndedMembers: z.boolean(), firstLineMayExceedLimit: z.boolean() }),
+  compression: z.object({
+    enabled: z.boolean(),
+    trigger: z.literal("sub-id-deletion"),
+    promoteEndedMembers: z.boolean(),
+    promotedLevels: z.literal(1),
+    firstLineMayExceedLimit: z.boolean(),
+    newPlacementLimitStillApplies: z.boolean(),
+    sourceStatus: z.literal("user-provided")
+  }),
   courses: z.record(courseCode, course),
   trainerBonuses: z.record(courseCode, trainerBonuses),
   trainerQualifications: z.object({ PT: trainerQualification, ST: trainerQualification }),
