@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import strategyRoutes from "./strategy";
 import { z } from "zod";
 import { previewCsv, validateMemberRelationships, CSV_TEMPLATES, type CsvKind } from "../src/domain/csv";
 import {
@@ -19,7 +20,7 @@ import {
   simulatePlacements
 } from "../src/domain/engine";
 import { planConfig } from "../src/domain/plan";
-import { placementValidationError } from "../src/domain/placement";
+import { effectiveFirstLineMemberIds, placementValidationError } from "../src/domain/placement";
 import {
   COURSES,
   TITLE_ORDER,
@@ -279,6 +280,7 @@ app.onError((error, context) => {
 });
 
 app.get("/api/v1/health", (context) => context.json({ ok: true, app: "fordays-navigator", planVersion: planConfig.version }));
+app.route("/api/v2/strategy", strategyRoutes);
 
 app.get("/api/v1/dashboard", async (context) => {
   const workspaceId = context.get("workspaceId");
@@ -378,7 +380,7 @@ app.post("/api/v1/simulation-members", async (context) => {
   const introducer = snapshot.members.find((member) => member.id === (input.introducerMemberId ?? root.id) && member.endedPeriod === null);
   if (!parent) return context.json({ error: "配置先が存在しません" }, 400);
   if (!introducer) return context.json({ error: "紹介者が存在しません" }, 400);
-  if (snapshot.members.filter((member) => member.parentMemberId === parent.id && member.endedPeriod === null).length >= planConfig.firstLineLimit) {
+  if (effectiveFirstLineMemberIds(snapshot.members, parent.id).size >= planConfig.firstLineLimit) {
     return context.json({ error: "配置先の1次ラインが上限7名です" }, 400);
   }
   const requestedMaster = input.idKind === "sub"
@@ -437,7 +439,7 @@ app.post("/api/v1/simulation-members/batch", async (context) => {
     const introducer = working.members.find((member) => member.id === introducerMemberId && member.endedPeriod === null);
     if (!parent) return context.json({ error: `${index + 1}人目の配置先が存在しません` }, 400);
     if (!introducer) return context.json({ error: `${index + 1}人目の紹介者が存在しません` }, 400);
-    if (working.members.filter((member) => member.parentMemberId === parent.id && member.endedPeriod === null).length >= planConfig.firstLineLimit) {
+    if (effectiveFirstLineMemberIds(working.members, parent.id).size >= planConfig.firstLineLimit) {
       return context.json({ error: `${index + 1}人目の配置先は1次ライン上限7名です` }, 400);
     }
     if (item.idKind === "sub" && ownedIds(working, root.id).length - 1 >= planConfig.maxSubIdsPerMaster) {
@@ -553,7 +555,7 @@ app.post("/api/v1/members", async (context) => {
   if (!input.parentMemberId && snapshot.members.some((member) => member.parentMemberId === null)) {
     return context.json({ error: "ルート会員はすでに登録されています" }, 400);
   }
-  if (input.parentMemberId && snapshot.members.filter((member) => member.parentMemberId === input.parentMemberId && member.endedPeriod === null).length >= planConfig.firstLineLimit) {
+  if (input.parentMemberId && effectiveFirstLineMemberIds(snapshot.members, input.parentMemberId).size >= planConfig.firstLineLimit) {
     return context.json({ error: "配置親の1次ラインが上限7名です" }, 400);
   }
   const member: Member = {

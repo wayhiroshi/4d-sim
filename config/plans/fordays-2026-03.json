@@ -1,12 +1,20 @@
 {
   "planId": "fordays-jp",
-  "version": "2026-03+2026-06-shopping-mall+sub-id+trainer",
+  "version": "2026-03+2026-06-shopping-mall+sub-id+trainer+compression-exception",
   "effectiveFrom": "2026-03-18",
   "effectiveTo": null,
   "businessMonthStartDay": 18,
   "firstLineLimit": 7,
   "maxSubIdsPerMaster": 5,
-  "compression": { "enabled": true, "promoteEndedMembers": true, "firstLineMayExceedLimit": true },
+  "compression": {
+    "enabled": true,
+    "trigger": "sub-id-deletion",
+    "promoteEndedMembers": true,
+    "promotedLevels": 1,
+    "firstLineMayExceedLimit": true,
+    "newPlacementLimitStillApplies": true,
+    "sourceStatus": "user-provided"
+  },
   "courses": {
     "A": { "code": "A", "recurringPv": 5330, "startBonus": 3740, "maxBaseDepth": 5, "baseLineRates": [0.15, 0.05, 0.05, 0.05, 0.05] },
     "B": { "code": "B", "recurringPv": 10670, "startBonus": 9640, "maxBaseDepth": 8, "baseLineRates": [0.15, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05] },

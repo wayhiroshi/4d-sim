@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import StrategyStudio, { StrategyOverlay } from "./StrategyStudio";
 import { api } from "./api";
 import { descendantMemberIds } from "./domain/placement";
 import {
@@ -77,7 +78,7 @@ function PageState({ loading, error, children }: { loading: boolean; error: stri
 
 const navItems = [
   ["/", "⌂", "ホーム"], ["/organization", "⌘", "組織"],
-  ["/simulator", "◇", "配置試算"], ["/forecast", "↗", "将来試算"], ["/more", "•••", "その他"]
+  ["/simulator", "◇", "戦略試算"], ["/more", "•••", "その他"]
 ] as const;
 
 function Layout() {
@@ -93,8 +94,11 @@ function Layout() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/organization" element={<Organization />} />
           <Route path="/products" element={<Products />} />
-          <Route path="/simulator" element={<Simulator />} />
-          <Route path="/forecast" element={<Forecast />} />
+          <Route path="/simulator" element={<StrategyStudio />} />
+          <Route path="/strategy" element={<Navigate to="/simulator" replace />} />
+          <Route path="/forecast" element={<Navigate to="/simulator" replace />} />
+          <Route path="/legacy/simulator" element={<Simulator />} />
+          <Route path="/legacy/forecast" element={<Forecast />} />
           <Route path="/imports" element={<Imports />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/reference/titles" element={<TitleReference />} />
@@ -127,8 +131,8 @@ function Dashboard() {
           <Metric label="概算手取" value={yen.format(data.bonus.estimatedNet)} />
         </div>
         <section className="simulation-actions" aria-label="主な試算">
-          <NavLink to="/simulator" className="simulation-action"><span>◇</span><div><strong>配置を試算</strong><small>全配置を再計算して上位3案を比較</small></div></NavLink>
-          <NavLink to="/forecast" className="simulation-action"><span>↗</span><div><strong>将来を試算</strong><small>3・6・12か月の条件別シナリオ</small></div></NavLink>
+          <NavLink to="/simulator" className="simulation-action"><span>◇</span><div><strong>Strategy Studio</strong><small>配置を動かして、TRDまでの期間と月額を比較</small></div></NavLink>
+          <NavLink to="/legacy/simulator" className="simulation-action"><span>↗</span><div><strong>従来の配置試算</strong><small>1人・一括・チームの仮配置</small></div></NavLink>
         </section>
         <section className="panel mission-panel">
           <div className="panel-title"><div><p className="eyebrow">SIMULATION CHECK</p><h2>試算で確認すること</h2></div><span className="status-chip">最大5件</span></div>
@@ -216,6 +220,7 @@ function Organization() {
   };
   return <PageState loading={loading} error={error}>{data && <>
     <PageHeading kicker="ORGANIZATION" title="組織ツリー" description="公式CSVがなくても、表示名と配置を手入力して組織を作れます" />
+    <StrategyOverlay />
     <form className="panel manual-member-form" onSubmit={(event) => void addMember(event)}>
       <div className="manual-member-heading"><p className="eyebrow">APP MEMBER</p><h2>実メンバーを手動追加</h2><p>公式会員IDは不要です。会員サイトのスクショを見ながら入力でき、画像自体はNavigatorへ保存しません。</p></div>
       <label>アプリ内表示名<input name="name" required maxLength={80} placeholder="例：山田さん、Aさん" /></label>

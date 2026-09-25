@@ -53,6 +53,41 @@ describe("business month", () => {
   });
 });
 
+describe("sub ID deletion compression", () => {
+  it("promotes every child by one level and permits more than seven effective first-line IDs", () => {
+    const endedSub = {
+      ...member("sub", "root"),
+      idKind: "sub" as const,
+      masterMemberId: "root",
+      endedPeriod: period
+    };
+    const direct = Array.from({ length: 6 }, (_, index) => member(`direct-${index + 1}`, "root"));
+    const promoted = [member("promoted-1", "sub"), member("promoted-2", "sub")];
+    const members = [member("root", null), endedSub, ...direct, ...promoted];
+    const data = snapshot(
+      members,
+      members
+        .filter((item) => item.endedPeriod === null)
+        .map((item) => purchase(`purchase-${item.id}`, item.id, 5330))
+    );
+
+    const ld = evaluateTitleChecklists(data, "root").find((item) => item.code === "LD");
+    expect(ld?.conditions.find((condition) => condition.key === "ld-first")?.current).toBe(8);
+
+    const [rootPlacement] = simulatePlacements(data, {
+      candidateName: "new-direct",
+      course: "A",
+      idKind: "master",
+      period,
+      targetTitle: "LD",
+      placementCandidateIds: ["root"],
+      taxProfile: tax
+    });
+    expect(rootPlacement).toMatchObject({ placementMemberId: "root", eligible: false });
+    expect(rootPlacement?.warnings).toContain("1次ライン上限7名に達しています");
+  });
+});
+
 describe("official golden line bonus cases", () => {
   it("calculates 1st G 10,670 pv plus 2nd A 5,330 pv as 1,868 yen", () => {
     const data = snapshot(

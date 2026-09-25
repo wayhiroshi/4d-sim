@@ -32,6 +32,43 @@ import {
 
 const money = (value: number) => Math.round(value);
 
+// The index belongs to one immutable month snapshot, never to a user/global cache.
+const indexKey = Symbol("month-calculation-index");
+type CalculationIndex = {
+  members: Map<string, Member>;
+  owned: Map<string, Member[]>;
+  children: Map<string, Member[]>;
+  introduced: Map<string, Member[]>;
+  purchases: Map<string, PurchaseEvent[]>;
+  descendants: Map<string, Array<{ member: Member; depth: number }>>;
+  strictSubCompression: boolean;
+  compressionEnabled: boolean;
+  priorDirectorPv?: Map<string, number>;
+};
+type IndexedSnapshot = OrganizationSnapshot & { [indexKey]?: CalculationIndex };
+export function indexMonth(snapshot: OrganizationSnapshot, options: { compressionEnabled?: boolean; priorDirectorPv?: Map<string, number> } = {}): OrganizationSnapshot {
+  const index: CalculationIndex = { members: new Map(), owned: new Map(), children: new Map(), introduced: new Map(), purchases: new Map(), descendants: new Map(), strictSubCompression: true, compressionEnabled: options.compressionEnabled ?? true, priorDirectorPv: options.priorDirectorPv };
+  for (const member of snapshot.members) {
+    index.members.set(member.id, member);
+    if (member.masterMemberId) index.owned.set(member.masterMemberId, [...(index.owned.get(member.masterMemberId) ?? []), member]);
+    if (member.parentMemberId) index.children.set(member.parentMemberId, [...(index.children.get(member.parentMemberId) ?? []), member]);
+    if (member.introducerMemberId) index.introduced.set(member.introducerMemberId, [...(index.introduced.get(member.introducerMemberId) ?? []), member]);
+  }
+  for (const purchase of snapshot.purchases) {
+    if (purchase.status !== "confirmed") continue;
+    const key = `${purchase.period}/${purchase.memberId}`;
+    index.purchases.set(key, [...(index.purchases.get(key) ?? []), purchase]);
+  }
+  Object.defineProperty(snapshot, indexKey, { value: index, configurable: true });
+  return snapshot;
+}
+const monthIndex = (snapshot: OrganizationSnapshot) => (snapshot as IndexedSnapshot)[indexKey];
+const findMember = (snapshot: OrganizationSnapshot, id: string) => monthIndex(snapshot)?.members.get(id) ?? snapshot.members.find((member) => member.id === id);
+const mayCompress = (snapshot: OrganizationSnapshot, member: Member) =>
+  planConfig.compression.enabled && planConfig.compression.promoteEndedMembers &&
+  (monthIndex(snapshot)?.compressionEnabled ?? true) &&
+  (!monthIndex(snapshot)?.strictSubCompression || member.idKind === "sub");
+
 export function previousPeriod(period: string): string {
   const [year, month] = period.split("-").map(Number);
   if (!year || !month || month < 1 || month > 12) throw new Error(`Invalid period: ${period}`);
@@ -54,6 +91,8 @@ export function periodForDate(date: Date): string {
 }
 
 function purchasesFor(snapshot: OrganizationSnapshot, memberId: string, period = snapshot.period): PurchaseEvent[] {
+  const index = monthIndex(snapshot);
+  if (index) return index.purchases.get(`${period}/${memberId}`) ?? [];
   return snapshot.purchases.filter(
     (purchase) => purchase.memberId === memberId && purchase.period === period && purchase.status === "confirmed"
   );
@@ -70,6 +109,8 @@ export function memberPv(snapshot: OrganizationSnapshot, memberId: string, perio
 }
 
 function rawChildrenOf(snapshot: OrganizationSnapshot, memberId: string): Member[] {
+  const index = monthIndex(snapshot);
+  if (index) return index.children.get(memberId) ?? [];
   return snapshot.members.filter((member) => member.parentMemberId === memberId);
 }
 
@@ -82,17 +123,20 @@ function childrenOf(snapshot: OrganizationSnapshot, memberId: string): Member[] 
     if (!member || visited.has(member.id)) continue;
     visited.add(member.id);
     const ended = member.endedPeriod !== null && member.endedPeriod <= snapshot.period;
-    if (ended && planConfig.compression.enabled && planConfig.compression.promoteEndedMembers) {
+    if (ended && mayCompress(snapshot, member)) {
       queue.push(...rawChildrenOf(snapshot, member.id));
-    } else if (!ended) output.push(member);
+    } else if (!ended || monthIndex(snapshot)?.strictSubCompression) output.push(member);
   }
   return output;
 }
 
 export function descendants(snapshot: OrganizationSnapshot, rootId: string): Array<{ member: Member; depth: number }> {
+  const index = monthIndex(snapshot);
+  const cached = index?.descendants.get(rootId);
+  if (cached) return cached;
   const output: Array<{ member: Member; depth: number }> = [];
-  const childrenByParent = new Map<string, Member[]>();
-  for (const member of snapshot.members) {
+  const childrenByParent = index?.children ?? new Map<string, Member[]>();
+  for (const member of index ? [] : snapshot.members) {
     if (member.parentMemberId === null) continue;
     const siblings = childrenByParent.get(member.parentMemberId) ?? [];
     siblings.push(member);
@@ -105,24 +149,31 @@ export function descendants(snapshot: OrganizationSnapshot, rootId: string): Arr
     if (!item || visited.has(item.member.id)) continue;
     visited.add(item.member.id);
     const ended = item.member.endedPeriod !== null && item.member.endedPeriod <= snapshot.period;
-    if (ended && planConfig.compression.enabled && planConfig.compression.promoteEndedMembers) {
+    if (ended && mayCompress(snapshot, item.member)) {
       for (const child of childrenByParent.get(item.member.id) ?? []) queue.push({ member: child, depth: item.depth });
       continue;
     }
-    if (ended) continue;
+    if (ended) {
+      // In Strategy Studio an ordinary departure stops this ID's earnings;
+      // surviving children retain their depth. Only the explicit sub-deletion
+      // rule promotes a generation. Do not erase an entire surviving branch.
+      if (index?.strictSubCompression) for (const child of childrenByParent.get(item.member.id) ?? []) queue.push({ member: child, depth: item.depth + 1 });
+      continue;
+    }
     output.push(item);
     for (const child of childrenByParent.get(item.member.id) ?? []) queue.push({ member: child, depth: item.depth + 1 });
   }
+  index?.descendants.set(rootId, output);
   return output;
 }
 
 export function ownedIds(snapshot: OrganizationSnapshot, masterId: string): Member[] {
-  const master = snapshot.members.find((member) => member.id === masterId);
+  const master = findMember(snapshot, masterId);
   if (!master) return [];
   if (master.idKind === "sub") return [master];
   return [
     master,
-    ...snapshot.members.filter((member) =>
+    ...(monthIndex(snapshot) ? monthIndex(snapshot)!.owned.get(masterId) ?? [] : snapshot.members).filter((member) =>
       member.idKind === "sub" &&
       member.masterMemberId === masterId &&
       (member.endedPeriod === null || member.endedPeriod > snapshot.period)
@@ -131,6 +182,8 @@ export function ownedIds(snapshot: OrganizationSnapshot, masterId: string): Memb
 }
 
 export function groupPv(snapshot: OrganizationSnapshot, rootId: string, period = snapshot.period): number {
+  if (monthIndex(snapshot)) return descendants(snapshot, rootId).reduce((sum, item) => sum + memberPv(snapshot, item.member.id, period), 0) +
+    purchasesFor(snapshot, rootId, period).filter((p) => p.kind === "additional").reduce((sum, p) => sum + p.pv * p.quantity, 0);
   const descendantIds = new Set(descendants(snapshot, rootId).map(({ member }) => member.id));
   return snapshot.purchases
     .filter((purchase) => purchase.period === period && purchase.status === "confirmed")
@@ -145,6 +198,10 @@ export function groupPvThroughDepth(
   maxDepth: number,
   period = snapshot.period
 ): number {
+  if (maxDepth === 3 && period === previousPeriod(snapshot.period) && monthIndex(snapshot)?.priorDirectorPv) return monthIndex(snapshot)!.priorDirectorPv!.get(rootId) ?? 0;
+  if (monthIndex(snapshot)) return descendants(snapshot, rootId).filter((item) => item.depth <= maxDepth)
+    .reduce((sum, item) => sum + memberPv(snapshot, item.member.id, period), 0) +
+    purchasesFor(snapshot, rootId, period).filter((p) => p.kind === "additional").reduce((sum, p) => sum + p.pv * p.quantity, 0);
   const includedIds = new Set(
     descendants(snapshot, rootId).filter((item) => item.depth <= maxDepth).map((item) => item.member.id)
   );
@@ -164,7 +221,7 @@ function lineCounts(snapshot: OrganizationSnapshot, rootId: string): Record<numb
 }
 
 function directIntroductions(snapshot: OrganizationSnapshot, rootId: string, activeOnly = false, includeSub = false): Member[] {
-  return snapshot.members.filter((member) => {
+  return (monthIndex(snapshot) ? monthIndex(snapshot)!.introduced.get(rootId) ?? [] : snapshot.members).filter((member) => {
     if (member.introducerMemberId !== rootId || (!includeSub && member.idKind === "sub") || (member.endedPeriod !== null && member.endedPeriod <= snapshot.period)) return false;
     return !activeOnly || isActive(snapshot, member.id);
   });
@@ -191,7 +248,7 @@ function computeTitleConditions(snapshot: OrganizationSnapshot, rootId: string):
   conditionsByTitle: Map<Exclude<TitleCode, "NONE">, ConditionResult[]>;
   directorAlternatives: NonNullable<TitleChecklistItem["alternatives"]>;
 } {
-  const root = snapshot.members.find((member) => member.id === rootId);
+  const root = findMember(snapshot, rootId);
   if (!root) throw new Error(`Member not found: ${rootId}`);
   const counts = lineCounts(snapshot, rootId);
   const totalMembers = descendants(snapshot, rootId).filter((item) => isActive(snapshot, item.member.id)).length;
@@ -216,7 +273,7 @@ function computeTitleConditions(snapshot: OrganizationSnapshot, rootId: string):
     numberCondition("director-p1-pv", "1〜3次ラインの2か月累計p.v.", currentDirectorPv + previousDirectorPv, planConfig.director.pattern1.rollingTwoMonthPv)
   ];
   const directorPattern1 = directorPattern1Conditions.every((condition) => condition.met);
-  const ownedIdCount = 1 + snapshot.members.filter((member) => member.masterMemberId === rootId && member.idKind === "sub").length;
+  const ownedIdCount = 1 + (monthIndex(snapshot) ? monthIndex(snapshot)!.owned.get(rootId) ?? [] : snapshot.members).filter((member) => member.masterMemberId === rootId && member.idKind === "sub").length;
   const pattern2IdEligible = !planConfig.director.pattern2ExcludesSevenOrMoreIds || ownedIdCount < 7;
   const directorPattern2Conditions: ConditionResult[] = [
     numberCondition("director-p2-lines", "1・2次ラインのアクティブ合計", (counts[1] ?? 0) + (counts[2] ?? 0), planConfig.director.pattern2.firstTwoLineTotal),
@@ -446,7 +503,7 @@ export function computeShoppingMallInvitationEstimate(options: {
 }
 
 export function computeLineBonus(snapshot: OrganizationSnapshot, rootId: string, forcedTitle?: TitleCode): number {
-  const root = snapshot.members.find((member) => member.id === rootId);
+  const root = findMember(snapshot, rootId);
   if (!root || !isActive(snapshot, rootId)) return 0;
   const title = forcedTitle ?? evaluateTitle(snapshot, rootId).achievedTitle;
   const rates = ratesFor(root, title);
@@ -462,21 +519,21 @@ export function computeLineBonus(snapshot: OrganizationSnapshot, rootId: string,
 function computeStartBonus(snapshot: OrganizationSnapshot, rootId: string): number {
   return snapshot.purchases
     .filter((purchase) => purchase.period === snapshot.period && purchase.kind === "initial" && purchase.status === "confirmed")
-    .filter((purchase) => snapshot.members.find((member) => member.id === purchase.memberId)?.introducerMemberId === rootId)
+    .filter((purchase) => findMember(snapshot, purchase.memberId)?.introducerMemberId === rootId)
     .reduce((sum, purchase) => {
-      const member = snapshot.members.find((item) => item.id === purchase.memberId);
+      const member = findMember(snapshot, purchase.memberId);
       return sum + (member ? planConfig.courses[member.course].startBonus : 0);
     }, 0);
 }
 
 function computeTrainerBonus(snapshot: OrganizationSnapshot, rootId: string): number {
-  const root = snapshot.members.find((member) => member.id === rootId);
+  const root = findMember(snapshot, rootId);
   if (!root || !isActive(snapshot, rootId)) return 0;
   return snapshot.purchases
     .filter((purchase) => purchase.period === snapshot.period && purchase.kind === "initial" && purchase.status === "confirmed")
-    .filter((purchase) => snapshot.members.find((member) => member.id === purchase.memberId)?.trainerMemberId === rootId)
+    .filter((purchase) => findMember(snapshot, purchase.memberId)?.trainerMemberId === rootId)
     .reduce((sum, purchase) => {
-      const member = snapshot.members.find((item) => item.id === purchase.memberId);
+      const member = findMember(snapshot, purchase.memberId);
       if (!member) return sum;
       const role = member.trainerBonusRole
         ?? (root.trainerCredential === "PT" ? "PT" : root.trainerCredential === "ST" ? "ST_SOLO" : null);
@@ -552,11 +609,11 @@ function invoiceTransitionDeduction(gross: number, period: string, invoiceRegist
 
 type RawBonus = Pick<BonusBreakdown, "start" | "trainer" | "line" | "director" | "title" | "gross">;
 
-function computeRawBonus(snapshot: OrganizationSnapshot, rootId: string): RawBonus {
+export function computeRawBonus(snapshot: OrganizationSnapshot, rootId: string, resolvedTitle?: TitleCode): RawBonus {
   if (!isActive(snapshot, rootId)) {
     return { start: 0, trainer: 0, line: 0, director: 0, title: 0, gross: 0 };
   }
-  const evaluatedTitle = evaluateTitle(snapshot, rootId).achievedTitle;
+  const evaluatedTitle = resolvedTitle ?? evaluateTitle(snapshot, rootId).achievedTitle;
   const start = computeStartBonus(snapshot, rootId);
   const trainer = computeTrainerBonus(snapshot, rootId);
   const line = titleAtLeast(evaluatedTitle, "DR")
@@ -584,8 +641,12 @@ export function computeBonus(
       gross: total.gross + bonus.gross
     };
   }, { start: 0, trainer: 0, line: 0, director: 0, title: 0, gross: 0 });
+  return settleBonus(raw, snapshot.period, taxProfile);
+}
+
+export function settleBonus(raw: RawBonus, period: string, taxProfile: TaxProfile): BonusBreakdown {
   const { start, trainer, line, director, title, gross } = raw;
-  const invoiceTransition = invoiceTransitionDeduction(gross, snapshot.period, taxProfile.invoiceRegistered);
+  const invoiceTransition = invoiceTransitionDeduction(gross, period, taxProfile.invoiceRegistered);
   const withholding = money(Math.max(0, gross - taxProfile.offsets - invoiceTransition) * taxProfile.withholdingRate);
   const payable = gross + taxProfile.priorCarryover - taxProfile.offsets - invoiceTransition - withholding;
   const shouldCarry = payable > 0 && payable < planConfig.tax.paymentCarryoverThreshold;
