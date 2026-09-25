@@ -6,7 +6,7 @@ const amount = z.number().finite();
 const count = z.number().int().min(0).max(100000);
 const id = z.string().min(1).max(120);
 const title = z.enum(TITLE_ORDER);
-const node = z.object({ id, name: z.string().max(80), parentId: id.nullable(), introducerId: id.nullable(), ownerId: id.nullable(), course: z.string().max(5), title, count, active: count, depth: count });
+const node = z.object({ id, name: z.string().max(80), parentId: id.nullable(), introducerId: id.nullable(), ownerId: id.nullable(), course: z.string().max(5), title, count, active: count, depth: count, enrolled: z.boolean().optional() });
 const income = z.object({ id, name: z.string().max(80), ownerId: id, title, acquiredTitle: title, trainer: z.string().max(20),
   start: amount, trainerBonus: amount, line: amount, director: amount, titleBonus: amount, gross: amount, recurring: amount, cost: amount });
 const bonus = z.object({ start: amount, trainer: amount, line: amount, director: amount, title: amount, gross: amount, estimatedNet: amount, carryover: amount,

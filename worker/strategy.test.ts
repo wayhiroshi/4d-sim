@@ -43,7 +43,7 @@ describe("Strategy API and real local D1", () => {
     const context = await (await request("/context")).json() as StrategyContext;
     const phase = defaultPhase(); for (const b of ["conservative", "standard", "challenge"] as const) phase.rates[b].introductions = 0;
     const input = strategyRequestSchema.parse({ name: "匿名のテスト", rootId: "root", partnerId: "partner", targetId: "root", horizonMonths: 12,
-      leaders: [{ id: "self", name: "本人", existingMemberId: "root", introducerId: "root", placementId: "root", startMonth: 1, initialTeam: 0, licenseAfterMonths: null, phases: [phase] }],
+      leaders: [{ id: "self", name: "本人", existingMemberId: "root", introducerId: "root", placementId: "root", startMonth: 1, initialTeam: 0, potentialDownlineIds: 300, licenseAfterMonths: null, phases: [phase] }],
       ownedMonthlyCosts: {}, courseMonthlyCosts: { A: 9950, B: 19900, F: 13170, G: 26340, I: 0 }, taxes: { root: context.tax, partner: context.tax } });
     const result: StrategySimulationResult = await runStrategy(context.snapshot, input);
     const first = await request("/plans", { planId: null, request: input, base: context.snapshot, result });
@@ -53,6 +53,7 @@ describe("Strategy API and real local D1", () => {
     expect(second.status).toBe(201);
     const restored = await (await request(`/revisions/${saved.id}`)).json() as StrategyRevision;
     expect(restored.result).toEqual(result); expect(restored.base).toEqual(context.snapshot);
+    expect(restored.request).toEqual(input);
     expect(restored.ruleSnapshot.version).toBe(result.planVersion);
     const versions = await (await request(`/plans/${saved.planId}/revisions`)).json() as unknown[];
     expect(versions).toHaveLength(2);

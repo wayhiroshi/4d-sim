@@ -20,6 +20,17 @@ function fixture() {
 }
 
 describe("TRD placement workspace", () => {
+  it("retains potential when moving a team and recognizes changed potential as a growth assumption", () => {
+    const { base, request } = fixture();
+    const nullable = structuredClone(request); nullable.leaders[0]!.potentialDownlineIds = null;
+    expect(sameGrowthAssumptions(request, strategyRequestSchema.parse(nullable))).toBe(true);
+    request.leaders.push({ ...request.leaders[0]!, id: "a-growth", existingMemberId: "a", placementId: "a", potentialDownlineIds: 100 });
+    const moved = movePlacement(base, request, "a", "sub");
+    expect(moved.leaders[1]!.potentialDownlineIds).toBe(100);
+    expect(sameGrowthAssumptions(request, moved)).toBe(true);
+    moved.leaders = moved.leaders.map(l => l.id === "a-growth" ? { ...l, potentialDownlineIds: 300 } : l);
+    expect(sameGrowthAssumptions(request, moved)).toBe(false);
+  });
   it("moves a whole branch without changing recruiter, ownership or source data", () => {
     const { base, request } = fixture(); const frozen = JSON.stringify({ base, request });
     const next = movePlacement(base, request, "a", "sub");

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { COURSES, TITLE_ORDER, type BonusBreakdown, type Member, type OrganizationSnapshot, type PlanConfig, type SavedForecast, type TaxProfile, type TitleCode } from "./types";
 
-export const STRATEGY_VERSION = "2.1.0";
+export const STRATEGY_VERSION = "2.2.1";
 export const CHECKPOINTS = [100, 300, 500, 1000, 1500, 2000] as const;
 export const BANDS = ["conservative", "standard", "challenge"] as const;
 export type Band = typeof BANDS[number];
@@ -27,6 +27,7 @@ export const leaderSchema = z.object({
   id, name: z.string().trim().min(1).max(80), existingMemberId: id.nullable(),
   introducerId: id, placementId: id, startMonth: month,
   initialTeam: z.number().int().min(0).max(2000),
+  potentialDownlineIds: z.number().int().min(0).max(5000).nullable().optional(),
   leaderCourse: z.enum(COURSES).default("G"),
   targetWeight: z.number().min(0).max(100).default(1),
   licenseAfterMonths: month.nullable(), phases: z.array(phaseSchema).min(1).max(30)
@@ -64,6 +65,8 @@ export const strategyRequestSchema = z.object({
   const seen = new Set<string>();
   const existing = new Set<string>();
   for (const [i, leader] of value.leaders.entries()) {
+    if (leader.potentialDownlineIds != null && leader.initialTeam > leader.potentialDownlineIds)
+      context.addIssue({ code: "custom", path: ["leaders", i, "potentialDownlineIds"], message: `${leader.name}のポテンシャルは最初に連れてくる人数以上にしてください` });
     if (seen.has(leader.id)) context.addIssue({ code: "custom", path: ["leaders", i], message: "リーダーIDが重複しています" });
     seen.add(leader.id);
     if (leader.existingMemberId) {
@@ -90,7 +93,7 @@ export interface StrategyMonth {
   ids: IdIncome[]; payees: Array<{ id: string; bonus: BonusBreakdown }>; changes: string[];
 }
 export interface StrategyCheckpointResult { memberCount: number; reached: boolean; reachedMonth: number | null; actualCount: number; remaining: number; snapshot: StrategyMonth | null; organization: StrategyNode[] }
-export interface StrategyNode { id: string; name: string; parentId: string | null; introducerId: string | null; ownerId: string | null; course: string; title: TitleCode; count: number; active: number; depth: number }
+export interface StrategyNode { id: string; name: string; parentId: string | null; introducerId: string | null; ownerId: string | null; course: string; title: TitleCode; count: number; active: number; depth: number; enrolled?: boolean }
 export interface StrategyVariantResult {
   candidate: StrategyCandidate; band: Band; months: StrategyMonth[]; checkpoints: StrategyCheckpointResult[];
   status: "reached" | "horizon" | "stalled" | "missing-assumptions"; titleMonth: number | null; completionMonth: number | null;
