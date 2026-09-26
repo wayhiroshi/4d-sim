@@ -19,7 +19,7 @@ export function placementNodes(base: OrganizationSnapshot, input: StrategySimula
       leaderId: input.leaders.find(l => l.existingMemberId === m.id)?.id };
   });
   for (const l of input.leaders.filter(l => !l.existingMemberId)) nodes.push({ id: `strategy-${l.id}`, name: l.name, parentId: l.placementId, introducerId: l.introducerId, sub: false, ownerId: null, planned: true, leaderId: l.id });
-  for (const a of input.actions.filter(a => a.kind === "create-sub")) if (!nodes.some(n => n.id === a.memberId)) nodes.push({ id: a.memberId, name: "作成予定サブ", parentId: a.parentId ?? a.ownerId, introducerId: a.ownerId, sub: true, ownerId: a.ownerId, planned: true, actionId: a.id });
+  for (const a of input.actions.filter(a => a.kind === "create-sub")) if (!nodes.some(n => n.id === a.memberId)) nodes.push({ id: a.memberId, name: a.displayName ?? "作成予定サブ", parentId: a.parentId ?? a.ownerId, introducerId: a.ownerId, sub: true, ownerId: a.ownerId, planned: true, actionId: a.id });
   return nodes;
 }
 
@@ -36,8 +36,6 @@ export function placementError(nodes: PlacementNode[], source: string, target: s
   }
   if (!seen.has(root)) return "今回の組織の外には配置できません";
   if (nodes.filter(n => n.parentId === target && n.id !== source).length >= planConfig.firstLineLimit) return `配置先の1次ラインは上限${planConfig.firstLineLimit} IDです`;
-  // Existing teams cannot be attached to someone who has not joined yet.
-  if (!from.planned && to.planned) return "既存チームは、現在在籍しているIDへ配置してください";
   return null;
 }
 
@@ -46,7 +44,7 @@ export function movePlacement(base: OrganizationSnapshot, input: StrategySimulat
   const error = placementError(nodes, source, target, input.rootId);
   if (error) throw new Error(error);
   const node = nodes.find(n => n.id === source)!;
-  return { ...input, placementMode: "manual", allowIntroducerIdChoice: false,
+  return { ...input, placementMode: "manual",
     placementOverrides: node.planned ? { ...input.placementOverrides } : { ...input.placementOverrides, [source]: target },
     actions: input.actions.map(a => a.id === node.actionId ? { ...a, parentId: target } : a),
     leaders: input.leaders.map(l => node.planned && l.id === node.leaderId ? { ...l, placementId: target } : l) };
@@ -58,14 +56,15 @@ export function applyPlacementOverrides(base: OrganizationSnapshot, input: Strat
   const byId = new Map(nodes.map(n => [n.id, n]));
   for (const [id, parent] of Object.entries(input.placementOverrides ?? {})) {
     const member = snapshot.members.find(m => m.id === id);
-    if (!member || id === input.rootId || member.parentMemberId === null || !byId.has(id) || !byId.has(parent) || byId.get(parent)!.planned) throw new Error("配置変更の対象が無効です");
+    if (!member || id === input.rootId || member.parentMemberId === null || !byId.has(id) || !byId.has(parent)) throw new Error("配置変更の対象が無効です");
     // Validate the final graph; edits may have been undone or reordered.
     const seen = new Set([id]); let cursor: string | null = parent;
     while (cursor) { if (seen.has(cursor)) throw new Error("組織に循環があります"); seen.add(cursor); cursor = byId.get(cursor)?.parentId ?? null; }
     if (!seen.has(input.rootId)) throw new Error("配置先は組織内で指定してください");
     const after = nodes.filter(n => n.parentId === parent).length;
     if (member.parentMemberId !== parent && after > planConfig.firstLineLimit) throw new Error("配置先の1次ライン上限を超えています");
-    member.parentMemberId = parent;
+    // Keep today's graph valid. A future parent receives this team on joining.
+    if (!byId.get(parent)!.planned) member.parentMemberId = parent;
   }
   for (const node of nodes.filter(n => n.planned)) {
     const seen = new Set([node.id]); let parent = node.parentId;

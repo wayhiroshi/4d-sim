@@ -45,6 +45,7 @@ describe("Strategy API and real local D1", () => {
     const input = strategyRequestSchema.parse({ name: "匿名のテスト", rootId: "root", partnerId: "partner", targetId: "root", horizonMonths: 12,
       leaders: [{ id: "self", name: "本人", existingMemberId: "root", introducerId: "root", placementId: "root", startMonth: 1, initialTeam: 0, potentialDownlineIds: 300, licenseAfterMonths: null, phases: [phase] }],
       ownedMonthlyCosts: {}, courseMonthlyCosts: { A: 9950, B: 19900, F: 13170, G: 26340, I: 0 }, taxes: { root: context.tax, partner: context.tax } });
+    input.growthPriority = [{ memberId: "root", title: "DR" }];
     const result: StrategySimulationResult = await runStrategy(context.snapshot, input);
     const first = await request("/plans", { planId: null, request: input, base: context.snapshot, result });
     expect(first.status).toBe(201);

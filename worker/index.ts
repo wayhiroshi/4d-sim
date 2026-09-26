@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import strategyRoutes from "./strategy";
 import { z } from "zod";
+import { manualPurchaseSchema } from "../src/shared/manual-purchase";
 import { previewCsv, validateMemberRelationships, CSV_TEMPLATES, type CsvKind } from "../src/domain/csv";
 import {
   computeBonus,
@@ -535,7 +536,7 @@ app.patch("/api/v1/simulation-members/:id/identity", async (context) => {
 });
 
 app.post("/api/v1/members", async (context) => {
-  const input = await boundedJson(context.req.raw, memberSchema);
+  const input = await boundedJson(context.req.raw, memberSchema.extend({ purchase: manualPurchaseSchema.optional() }));
   const snapshot = await loadSnapshot(context.env.DB, context.get("workspaceId"), input.joinedPeriod);
   const memberIds = new Set(snapshot.members.map((member) => member.id));
   const references = [input.parentMemberId, input.introducerMemberId, input.masterMemberId, input.trainerMemberId].filter((id): id is string => Boolean(id));
@@ -569,7 +570,13 @@ app.post("/api/v1/members", async (context) => {
     directorPromotedPeriod: input.directorPromotedPeriod,
     joinedPeriod: input.joinedPeriod, endedPeriod: input.endedPeriod
   };
-  await memberInsert(context.env.DB, member).run();
+  const statements = [memberInsert(context.env.DB, member)];
+  if (input.purchase) statements.push(purchaseInsert(context.env.DB, {
+    ...input.purchase, id: crypto.randomUUID(), workspaceId: member.workspaceId, memberId: member.id,
+    period: member.joinedPeriod, productCode: null, status: "confirmed", quantity: 1
+  }));
+  // Member and purchase must succeed together; never leave a half-saved entry.
+  await context.env.DB.batch(statements);
   return context.json(member, 201);
 });
 

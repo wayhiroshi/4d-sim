@@ -13,7 +13,7 @@ const bonus = z.object({ start: amount, trainer: amount, line: amount, director:
   deductions: z.object({ invoiceTransition: amount, withholding: amount, transferFee: amount, offsets: amount }) });
 const row = z.object({ month: count, period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), count, enrolled: count, inactive: count, exited: count, ownedSubs: count, pv: amount,
   targetTitle: title, missing: z.array(z.string().max(500)).max(50), gross: amount, recurring: amount, recurringNet: amount, recurringCashflow: amount, line: amount, net: amount, costs: amount, cashflow: amount, cumulative: amount,
-  ids: z.array(income).max(12), payees: z.array(z.object({ id, bonus })).max(2), changes: z.array(z.string().max(500)).max(200) });
+  ids: z.array(income).max(12), payees: z.array(z.object({ id, bonus })).max(2), changes: z.array(z.string().max(500)).max(200), organization: z.array(node).max(5000).optional() });
 const candidate = z.object({ id, label: z.string().max(200), placements: z.record(id, id), introducers: z.record(id, id), directPlacements: z.record(id, z.array(id).min(1).max(12)), actions: z.array(actionSchema).max(120) });
 const variant = z.object({ candidate, band: z.enum(["conservative", "standard", "challenge"]), months: z.array(row).min(1).max(12013),
   checkpoints: z.array(z.object({ memberCount: count, reached: z.boolean(), reachedMonth: count.nullable(), actualCount: count, remaining: count, snapshot: row.nullable(), organization: z.array(node).max(5000) })).length(6),

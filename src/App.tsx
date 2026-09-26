@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import StrategyStudio, { StrategyOverlay } from "./StrategyStudio";
+import PlacementPlayground from "./PlacementPlayground";
+import SimulatorVersionSwitch from "./SimulatorVersionSwitch";
 import QuickGuide from "./QuickGuide";
+import MemberOrganizationTree from "./MemberOrganizationTree";
+import ManualPurchaseFields from "./ManualPurchaseFields";
+import MemberPurchaseForm from "./MemberPurchaseForm";
+import { readManualPurchase } from "./shared/manual-purchase";
 import { api } from "./api";
 import { descendantMemberIds } from "./domain/placement";
+import { organizationTitles } from "./domain/organization-titles";
 import {
   COURSES,
   TITLE_ORDER,
@@ -91,11 +98,13 @@ function Layout() {
         <div className="security-pill">Access保護</div>
       </header>
       <main className="main-content">
+        <SimulatorVersionSwitch />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/organization" element={<Organization />} />
           <Route path="/products" element={<Products />} />
           <Route path="/simulator" element={<StrategyStudio />} />
+          <Route path="/try" element={<PlacementPlayground />} />
           <Route path="/strategy" element={<Navigate to="/simulator" replace />} />
           <Route path="/forecast" element={<Navigate to="/simulator" replace />} />
           <Route path="/legacy/simulator" element={<Simulator />} />
@@ -164,6 +173,7 @@ function Organization() {
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [addPanel, setAddPanel] = useState<"actual" | "trial" | null>(null);
   const [manualIdKind, setManualIdKind] = useState<IdKind>("master");
   const [trialIdKind, setTrialIdKind] = useState<IdKind>("master");
   const snapshot = data?.snapshot ?? null;
@@ -171,7 +181,7 @@ function Organization() {
   const actualMembers = snapshot?.members.filter((member) => !trialIds.has(member.id) && member.endedPeriod === null) ?? [];
   const rootMember = actualMembers.find((member) => member.parentMemberId === null) ?? actualMembers[0] ?? null;
   const actualMasterMembers = actualMembers.filter((member) => member.idKind === "master" && member.masterMemberId === null);
-  const selected = snapshot?.members.find((member) => member.id === selectedId) ?? snapshot?.members[0] ?? null;
+  const selected = snapshot?.members.find((member) => member.id === selectedId) ?? null;
   const addMember = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); if (!snapshot || !rootMember) return;
     const form = event.currentTarget; const values = new FormData(form); setBusy(true); setMessage(null);
@@ -185,9 +195,9 @@ function Organization() {
         trainerCredential: "NONE", sponsorLicense: false,
         openStudioAttendances: 0, preTrainerCourseCompleted: false, preTrainerKitPurchased: false,
         startTrainerCourseCompleted: false, startTrainerKitPurchased: false, directorPromotedPeriod: null,
-        joinedPeriod: snapshot.period, endedPeriod: null
+        joinedPeriod: snapshot.period, endedPeriod: null, purchase: readManualPurchase(values)
       });
-      form.reset(); setManualIdKind("master"); setSelectedId(member.id); setMessage(`${member.displayName}をNavigator内の実組織へ追加しました`); reload();
+      form.reset(); setManualIdKind("master"); setAddPanel(null); setSelectedId(member.id); setMessage(`${member.displayName}をNavigator内の実組織へ追加しました`); reload();
     } catch (reason) { setMessage(reason instanceof Error ? reason.message : "追加できませんでした"); }
     finally { setBusy(false); }
   };
@@ -207,7 +217,7 @@ function Organization() {
         masterMemberId: trialIdKind === "sub" ? String(values.get("subOwner") || rootMember?.id || "") : null,
         trainerBonusRole: String(values.get("trainerRole")) as TrainerBonusRole || null
       });
-      form.reset(); setTrialIdKind("master");
+      form.reset(); setTrialIdKind("master"); setAddPanel(null);
       setMessage("仮メンバーを試算中の組織へ追加しました");
       reload();
     } catch (reason) { setMessage(reason instanceof Error ? reason.message : "追加できませんでした"); }
@@ -220,10 +230,11 @@ function Organization() {
     catch (reason) { setMessage(reason instanceof Error ? reason.message : "削除できませんでした"); }
     finally { setBusy(false); }
   };
-  return <PageState loading={loading} error={error}>{data && <>
-    <PageHeading kicker="ORGANIZATION" title="組織ツリー" description="公式CSVがなくても、表示名と配置を手入力して組織を作れます" />
-    <StrategyOverlay />
-    <form className="panel manual-member-form" onSubmit={(event) => void addMember(event)}>
+  return <PageState loading={loading} error={error}>{data && <div className="org-workspace">
+    <section className="panel"><h2>配置を変えたら、どうなる？</h2><p>実際の登録を変えず、追加・移動と月額の違いを試せます。</p><NavLink to="/try" className="primary-button">匿名サンプルで試す →</NavLink></section>
+    <PageHeading kicker="ORGANIZATION" title="組織ツリー" description="誰の下に、何IDあるか。枝ごとの規模をひと目で確認。" />
+    <div className="org-toolbar"><p>実メンバー <b>{actualMembers.length} ID</b> ＋ 仮 <b>{data.simulationMembers.length} ID</b></p><div className="org-toolbar-actions"><button aria-expanded={addPanel === "trial"} aria-controls="org-add-trial" onClick={() => setAddPanel(addPanel === "trial" ? null : "trial")}>{addPanel === "trial" ? "追加を閉じる" : "＋ 仮メンバー"}</button><button aria-expanded={addPanel === "actual"} aria-controls="org-add-actual" onClick={() => setAddPanel(addPanel === "actual" ? null : "actual")}>{addPanel === "actual" ? "追加を閉じる" : "＋ 実メンバー"}</button></div></div>
+    {addPanel === "actual" && <form id="org-add-actual" className="panel manual-member-form" onSubmit={(event) => void addMember(event)}>
       <div className="manual-member-heading"><p className="eyebrow">APP MEMBER</p><h2>実メンバーを手動追加</h2><p>公式会員IDは不要です。会員サイトのスクショを見ながら入力でき、画像自体はNavigatorへ保存しません。</p></div>
       <label>アプリ内表示名<input name="name" required maxLength={80} placeholder="例：山田さん、Aさん" /></label>
       <label>IDの扱い<select name="idKind" value={manualIdKind} onChange={(event) => setManualIdKind(event.target.value as IdKind)}><option value="master">通常の会員（マスターID）</option><option value="sub">サブID（所有者を指定）</option></select><small className="field-note">サブIDは選んだ所有者の収入へ合算します</small></label>
@@ -231,13 +242,11 @@ function Organization() {
       <label>配置先<select name="parent" defaultValue={rootMember?.id}>{actualMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>
       {manualIdKind === "master" && <label>紹介者<select name="introducer" defaultValue={rootMember?.id}>{actualMembers.map((member) => <option key={member.id} value={member.id}>{member.displayName}</option>)}</select></label>}
       {manualIdKind === "sub" && <label>サブIDの所有者<select name="subOwner" defaultValue={rootMember?.id}>{actualMasterMembers.map((member) => <option key={member.id} value={member.id}>{member.id === rootMember?.id ? `自分：${member.displayName}` : `パートナー：${member.displayName}`}</option>)}</select><small className="field-note">パートナーを選ぶと「パートナーサブ」として登録</small></label>}
+      <ManualPurchaseFields period={snapshot!.period} />
       <button className="primary-button" disabled={busy || !rootMember}>{busy ? "追加中…" : "実組織へ追加"}</button>
       <p className="manual-member-note">この操作はNavigator内だけに保存され、フォーデイズ公式サイトの登録・配置は変更しません。</p>
-    </form>
-    <section className="trial-banner"><div><strong>試算中 {data.simulationMembers.length}人</strong><small>点線のカードは仮メンバーです。実際の登録データには反映されません。</small></div>{data.simulationMembers.length > 0 && <button className="text-button danger-text" disabled={busy} onClick={() => setConfirmingClear(true)}>仮メンバーを全削除</button>}</section>
-    {confirmingClear && <section className="inline-confirm" role="alert"><div><strong>この営業月の仮メンバーを全員削除しますか？</strong><small>実組織には影響しません。この操作は取り消せません。</small></div><div className="inline-confirm-actions"><button className="text-button" disabled={busy} onClick={() => setConfirmingClear(false)}>キャンセル</button><button className="danger-button" disabled={busy} onClick={() => void clearTrials()}>{busy ? "削除中…" : `${data.simulationMembers.length}人を削除する`}</button></div></section>}
-    {data.simulationMembers.length > 0 && <TrialBonusSummary comparison={data.bonusComparison} count={data.simulationMembers.length} />}
-    <form className="panel trial-form" onSubmit={(event) => void addTrial(event)}>
+    </form>}
+    {addPanel === "trial" && <form id="org-add-trial" className="panel trial-form" onSubmit={(event) => void addTrial(event)}>
       <div><p className="eyebrow">MANUAL TRIAL</p><h2>仮メンバーを手動追加</h2></div>
       <label>試算上の名前<input name="name" required maxLength={80} placeholder={`仮メンバー${data.simulationMembers.length + 1}`} /></label>
       <label>IDの扱い<select name="idKind" value={trialIdKind} onChange={(event) => setTrialIdKind(event.target.value as IdKind)}><option value="master">通常の新規会員</option><option value="sub">サブID（所有者を指定）</option></select><small className="field-note">サブIDは選んだ所有者の収入へ合算します</small></label>
@@ -246,37 +255,23 @@ function Organization() {
       <label>配置先<select name="parent">{snapshot?.members.filter((member) => member.endedPeriod === null).map((member) => <option key={member.id} value={member.id}>{trialIds.has(member.id) ? "【仮】" : ""}{member.displayName}</option>)}</select></label>
       <label>Aさん役<select name="trainerRole">{TRAINER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!trainerRoleAvailable(rootMember?.trainerCredential ?? "NONE", option.value)}>{option.label}</option>)}</select><small className="field-note">現在の登録資格：{!rootMember || rootMember.trainerCredential === "NONE" ? "未取得" : rootMember.trainerCredential}</small></label>
       <button className="secondary-button" disabled={busy}>{busy ? "反映中…" : "試算組織へ追加"}</button>
-    </form>
+    </form>}
     {message && <p className="status-message">{message}</p>}
     <div className="organization-layout">
-      <section className="panel tree-panel">
-        {snapshot?.members.filter((member) => member.parentMemberId === null).map((root) => <TreeNode key={root.id} member={root} snapshot={snapshot} simulationIds={trialIds} depth={0} selectedId={selected?.id ?? null} onSelect={setSelectedId} />)}
-      </section>
-      {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} simulationIds={trialIds} rootMemberId={rootMember?.id ?? null} onUpdated={(displayName, idKind) => { setMessage(`「${displayName}」のアップと${idKind === "sub" ? "サブID所有者" : "ID種別"}を保存しました`); reload(); }} onDeleted={(displayName) => { setSelectedId(null); setMessage(`仮メンバー「${displayName}」を1件削除しました`); reload(); }} />}
+      {snapshot && <MemberOrganizationTree snapshot={snapshot} simulationIds={trialIds} selectedId={selected?.id ?? null} onSelect={setSelectedId}/>}
+      {!selected && <aside className="panel org-detail-empty"><h2>メンバーの詳細</h2><p>ツリーの「詳細」から<br/>名前・サブID・配置先を編集できます。</p><NavLink to="/simulator">将来の配置・収入を試算する →</NavLink></aside>}
+      {selected && snapshot && <MemberDetail member={selected} snapshot={snapshot} simulation={trialIds.has(selected.id)} simulationIds={trialIds} rootMemberId={rootMember?.id ?? null} onPurchaseSaved={() => { setMessage("購入情報を保存しました。タイトル・報酬へ反映しました"); reload(); }} onUpdated={(displayName, idKind) => { setMessage(`「${displayName}」のアップと${idKind === "sub" ? "サブID所有者" : "ID種別"}を保存しました`); reload(); }} onDeleted={(displayName) => { setSelectedId(null); setMessage(`仮メンバー「${displayName}」を1件削除しました`); reload(); }} />}
     </div>
-  </>}</PageState>;
+    <details className="org-secondary"><summary>仮配置の報酬・仮メンバーの管理</summary><section className="trial-banner"><div><strong>試算中 {data.simulationMembers.length}人</strong><small>仮メンバーは実際の登録データには反映されません。</small></div>{data.simulationMembers.length > 0 && <button className="text-button danger-text" disabled={busy} onClick={() => setConfirmingClear(true)}>仮メンバーを全削除</button>}</section>
+    {confirmingClear && <section className="inline-confirm" role="alert"><div><strong>この営業月の仮メンバーを全員削除しますか？</strong><small>実組織には影響しません。この操作は取り消せません。</small></div><div className="inline-confirm-actions"><button className="text-button" disabled={busy} onClick={() => setConfirmingClear(false)}>キャンセル</button><button className="danger-button" disabled={busy} onClick={() => void clearTrials()}>{busy ? "削除中…" : `${data.simulationMembers.length}人を削除する`}</button></div></section>}
+    {data.simulationMembers.length > 0 && <TrialBonusSummary comparison={data.bonusComparison} count={data.simulationMembers.length} />}</details>
+    <StrategyOverlay />
+  </div>}</PageState>;
 }
 
 function TrialBonusSummary({ comparison, count }: { comparison: SimulationOrganization["bonusComparison"]; count: number }) {
   const signedYen = (value: number) => `${value >= 0 ? "+" : ""}${yen.format(value)}`;
   return <section className="panel trial-bonus-summary"><div className="panel-title"><div><p className="eyebrow">TRIAL REWARD</p><h2>仮配置後の報酬試算</h2><small>本人の保有IDを{comparison.actualOwnedIdCount}ID → {comparison.simulatedOwnedIdCount}IDとして合算</small></div><span className="status-chip">仮{count}人を反映</span></div><div className="trial-bonus-metrics"><div><small>登録月の総ボーナス</small><strong>{yen.format(comparison.simulated.gross)}</strong></div><div><small>実組織との差</small><strong className={comparison.delta.gross >= 0 ? "positive" : "negative"}>{signedYen(comparison.delta.gross)}</strong></div><div><small>概算振込額</small><strong>{yen.format(comparison.simulated.estimatedNet)}</strong></div><div><small>概算振込額の差</small><strong className={comparison.delta.estimatedNet >= 0 ? "positive" : "negative"}>{signedYen(comparison.delta.estimatedNet)}</strong></div></div><BonusDeltaDetails delta={comparison.delta} /><p className="warning">仮メンバー全員の初回・定期購入相当を現在営業月へ反映した参考試算です。サブID分は本人収入へ合算します。公式登録・報酬明細は変更しません。</p></section>;
-}
-
-function TreeNode({ member, snapshot, simulationIds, depth, selectedId, onSelect }: { member: Member; snapshot: OrganizationSnapshot; simulationIds: Set<string>; depth: number; selectedId: string | null; onSelect: (id: string) => void }) {
-  const [expanded, setExpanded] = useState(true);
-  const children = snapshot.members.filter((item) => item.parentMemberId === member.id);
-  const childrenId = `tree-children-${member.id}`;
-  const pv = snapshot.purchases
-    .filter((purchase) => purchase.memberId === member.id && purchase.period === snapshot.period)
-    .filter((purchase) => !simulationIds.has(member.id) || purchase.kind !== "initial")
-    .reduce((sum, purchase) => sum + purchase.pv * purchase.quantity, 0);
-  return <div className="tree-branch" style={{ "--depth": depth } as React.CSSProperties}>
-    <button className={`member-node${selectedId === member.id ? " selected" : ""}${simulationIds.has(member.id) ? " simulation" : ""}`} aria-expanded={children.length > 0 ? expanded : undefined} aria-controls={children.length > 0 ? childrenId : undefined} onClick={() => { onSelect(member.id); if (children.length > 0) setExpanded((current) => !current); }}>
-      <span className={`course course-${member.course}`}>{member.course}</span><span className="member-node-content"><strong>{member.displayName}{member.idKind === "sub" && <em className="trial-tag">サブ</em>}{simulationIds.has(member.id) && <em className="trial-tag">仮</em>}</strong><small>{number.format(pv)} p.v. · {member.title}</small></span>
-      {children.length > 0 && <span className={`tree-toggle${expanded ? " expanded" : ""}`} aria-hidden="true"><small>{children.length}人</small><b>⌄</b></span>}
-    </button>
-    {children.length > 0 && expanded && <div className="tree-children" id={childrenId}>{children.map((child) => <TreeNode key={child.id} member={child} snapshot={snapshot} simulationIds={simulationIds} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />)}</div>}
-  </div>;
 }
 
 function SimulatorOrganizationNode({ member, snapshot, simulationIds, depth }: { member: Member; snapshot: OrganizationSnapshot; simulationIds: Set<string>; depth: number }) {
@@ -297,7 +292,9 @@ function SimulatorOrganizationNode({ member, snapshot, simulationIds, depth }: {
   </div>;
 }
 
-function MemberDetail({ member, snapshot, simulation = false, simulationIds, rootMemberId, onUpdated, onDeleted }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean; simulationIds: Set<string>; rootMemberId: string | null; onUpdated: (displayName: string, idKind: IdKind) => void; onDeleted: (displayName: string) => void }) {
+function MemberDetail({ member, snapshot, simulation = false, simulationIds, rootMemberId, onUpdated, onDeleted, onPurchaseSaved }: { member: Member; snapshot: OrganizationSnapshot; simulation?: boolean; simulationIds: Set<string>; rootMemberId: string | null; onUpdated: (displayName: string, idKind: IdKind) => void; onDeleted: (displayName: string) => void; onPurchaseSaved: () => void }) {
+  const titles = useMemo(() => organizationTitles(snapshot), [snapshot]);
+  const titleResult = titles.get(member.id);
   const purchases = snapshot.purchases.filter((purchase) => purchase.memberId === member.id).slice(-5).reverse();
   const [editing, setEditing] = useState(false); const [displayName, setDisplayName] = useState(member.displayName); const [idKind, setIdKind] = useState<IdKind>(member.idKind); const [masterMemberId, setMasterMemberId] = useState(member.masterMemberId ?? rootMemberId ?? ""); const [parentMemberId, setParentMemberId] = useState(member.parentMemberId ?? ""); const [saving, setSaving] = useState(false); const [confirmingDelete, setConfirmingDelete] = useState(false); const [editError, setEditError] = useState<string | null>(null);
   useEffect(() => { setDisplayName(member.displayName); setIdKind(member.idKind); setMasterMemberId(member.masterMemberId ?? rootMemberId ?? ""); setParentMemberId(member.parentMemberId ?? ""); setEditing(false); setConfirmingDelete(false); setEditError(null); }, [member.id, member.displayName, member.idKind, member.masterMemberId, member.parentMemberId, rootMemberId]);
@@ -328,11 +325,13 @@ function MemberDetail({ member, snapshot, simulation = false, simulationIds, roo
   return <aside className={`panel member-detail${simulation ? " simulation-detail" : ""}`}><p className="eyebrow">{simulation ? "TRIAL MEMBER" : "MEMBER DETAIL"}</p><div className="member-name-heading"><h2>{member.displayName}{simulation && <em className="trial-tag">仮</em>}</h2><button className="text-button" onClick={() => setEditing((current) => !current)}>{editing ? "閉じる" : "名前・ID・アップを編集"}</button></div>
     {editing && <form className="rename-form identity-form" onSubmit={(event) => void saveIdentity(event)}><label>アプリ内表示名<input autoFocus value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label><label>ID種別<select value={idKind} disabled={rootIsFixed} onChange={(event) => setIdKind(event.target.value as IdKind)}><option value="master">マスターID</option><option value="sub">サブID（所有者を指定）</option></select>{rootIsFixed && <small className="field-note">本人のルートIDはマスター固定です</small>}</label>{idKind === "sub" && <label>サブIDの所有者<select value={masterMemberId} onChange={(event) => setMasterMemberId(event.target.value)}>{masterOptions.map((item) => <option key={item.id} value={item.id}>{item.id === rootMemberId ? `自分：${item.displayName}` : `パートナー：${item.displayName}`}</option>)}</select><small className="field-note">パートナーを選ぶとパートナーサブとして合算します</small></label>}{!rootIsFixed && <label>アップ（配置親）<select value={parentMemberId} onChange={(event) => setParentMemberId(event.target.value)}>{parentOptions.map((item) => <option key={item.id} value={item.id}>{simulationIds.has(item.id) ? "【仮】" : ""}{item.displayName}</option>)}</select><small className="field-note">配下がいる場合は、その枝ごと新しいアップの下へ移動します</small></label>}<button className="secondary-button" disabled={saving || !displayName.trim() || (idKind === "sub" && !masterMemberId) || (!rootIsFixed && !parentMemberId)}>{saving ? "保存中…" : "変更を保存"}</button>{editError && <p className="form-error">{editError}</p>}<p className="identity-note">サブIDは選んだ所有者の収入へ合算します。変更するのはNavigator内の試算データだけで、公式サイトの登録は変更しません。</p></form>}
     {simulation && <p className="trial-note">試算中だけ存在する仮メンバーです。初回・リピート相当を各1件として計算し、公式登録・実組織には反映されません。</p>}
-    <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>タイトル</dt><dd>{member.title}</dd></div><div><dt>ID種別</dt><dd>{idKindLabel}</dd></div><div><dt>アップ</dt><dd>{snapshot.members.find((item) => item.id === member.parentMemberId)?.displayName ?? "ルート"}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div>{simulation && <div><dt>Aさん役</dt><dd>{TRAINER_ROLE_OPTIONS.find((option) => option.value === (member.trainerBonusRole ?? ""))?.label ?? "担当なし"}</dd></div>}</dl>
+    <dl><div><dt>コース</dt><dd>{member.course}</dd></div><div><dt>当月タイトル（試算）</dt><dd>{titleResult?.evaluation.achievedTitle === "NONE" ? "条件未達" : titleResult?.evaluation.achievedTitle ?? "対象外"}</dd></div><div><dt>登録済みタイトル</dt><dd>{member.title === "NONE" ? "未取得" : member.title}</dd></div><div><dt>ID種別</dt><dd>{idKindLabel}</dd></div><div><dt>アップ</dt><dd>{snapshot.members.find((item) => item.id === member.parentMemberId)?.displayName ?? "ルート"}</dd></div><div><dt>トレーナー</dt><dd>{member.trainerCredential}</dd></div>{simulation && <div><dt>Aさん役</dt><dd>{TRAINER_ROLE_OPTIONS.find((option) => option.value === (member.trainerBonusRole ?? ""))?.label ?? "担当なし"}</dd></div>}</dl>
+    {titleResult && <details><summary>LD・DRの達成条件を確認</summary>{titleResult.checklist.filter(c => c.code === "LD" || c.code === "DR").map(c => <section key={c.code}><h3>{c.code}</h3>{c.conditions.map(condition => <p key={condition.key}>{condition.met ? "✓" : "未達"} {condition.label}：{String(condition.current)} / {String(condition.required)}</p>)}{c.alternatives?.map(a => <details key={a.label}><summary>{a.label} {a.met ? "✓" : "未達"}</summary>{a.conditions.map(condition => <p key={condition.key}>{condition.met ? "✓" : "未達"} {condition.label}：{String(condition.current)} / {String(condition.required)}</p>)}</details>)}</section>)}</details>}
     {simulation && !confirmingDelete && <button className="text-button danger-text member-delete" disabled={saving} onClick={() => setConfirmingDelete(true)}>この仮メンバーを1件削除</button>}
     {simulation && confirmingDelete && <div className="member-delete-confirm" role="alert"><strong>「{member.displayName}」を削除しますか？</strong><small>配下がいる場合は、先にそのメンバーのアップを変更してください。</small><div><button className="text-button" disabled={saving} onClick={() => setConfirmingDelete(false)}>キャンセル</button><button className="danger-button" disabled={saving} onClick={() => void deleteTrial()}>{saving ? "削除中…" : "1件削除"}</button></div></div>}
     {editError && !editing && <p className="form-error">{editError}</p>}
-    <h3>購入履歴</h3>{purchases.length ? purchases.map((purchase) => <div className="history-row" key={purchase.id}><span>{purchase.period} · {purchase.kind}</span><strong>{number.format(purchase.pv)} p.v.</strong></div>) : <p className="muted">履歴はありません</p>}
+    {!simulation && <MemberPurchaseForm key={`${member.id}-${snapshot.period}`} member={member} snapshot={snapshot} onSaved={onPurchaseSaved} />}
+    <h3>購入履歴</h3>{purchases.length ? purchases.map((purchase) => <div className="history-row" key={purchase.id}><span>{purchase.period} · {({ initial: "初回", repeat: "リピート", additional: "追加" })[purchase.kind]}{purchase.status === "planned" ? "（予定）" : ""}</span><strong>{number.format(purchase.pv * purchase.quantity)} p.v.</strong></div>) : <p className="muted">履歴はありません</p>}
   </aside>;
 }
 

@@ -20,6 +20,13 @@ function fixture() {
 }
 
 describe("TRD placement workspace", () => {
+  it("does not silently disable the chosen future referral policy when dragging a team", () => {
+    const {base,request}=fixture(); request.allowIntroducerIdChoice=true; request.growthPriority=[{memberId:"sub",title:"DR"}];
+    const next=movePlacement(base,request,"a","sub");
+    expect(next.allowIntroducerIdChoice).toBe(true);
+    expect(next.growthPriority).toEqual(request.growthPriority);
+    expect(applyPlacementOverrides(base,next).members.find(m=>m.id==="a")!.introducerMemberId).toBe("root");
+  });
   it("retains potential when moving a team and recognizes changed potential as a growth assumption", () => {
     const { base, request } = fixture();
     const nullable = structuredClone(request); nullable.leaders[0]!.potentialDownlineIds = null;
@@ -66,6 +73,35 @@ describe("TRD placement workspace", () => {
     const moved = movePlacement(base, request, "future-sub", "a");
     expect(moved.actions[0]!.parentId).toBe("a");
     expect(() => movePlacement(base, request, "future-sub", "strategy-new")).toThrow("配下");
+  });
+  it("moves an existing team under a new leader only after joining, preserving its history and children", async () => {
+    const {base,request} = fixture();
+    request.leaders.push({ ...request.leaders[0]!, id: "new", name: "新しい人", existingMemberId: null, placementId: "sub", startMonth: 3 });
+    const original = JSON.stringify({base,request});
+    const moved = movePlacement(base,request,"a","strategy-new");
+    expect(placementNodes(base,moved).find(n => n.id === "a")!.parentId).toBe("strategy-new");
+    const placed = applyPlacementOverrides(base,moved);
+    expect(placed.members.find(m => m.id === "a")).toEqual(base.members.find(m => m.id === "a"));
+    const result = (await runStrategy(base,moved)).variants[0]!.bands.standard;
+    expect(result.months[2]!.organization!.find(n => n.id === "a")!.parentId).toBe("root");
+    expect(result.months[3]!.organization!.find(n => n.id === "a")!.parentId).toBe("strategy-new");
+    expect(result.months[3]!.organization!.find(n => n.id === "b")!.parentId).toBe("a");
+    expect(result.months[3]!.changes.some(c => c.includes("移動（試算）"))).toBe(true);
+    expect(JSON.stringify({base,request})).toBe(original);
+    expect(() => movePlacement(base,moved,"strategy-new","b")).toThrow("配下");
+    expect(strategyResultSchema.safeParse(await runStrategy(base,moved)).success).toBe(true);
+  });
+  it("moves owned subs under planned leaders and leaves delayed destinations pending", async () => {
+    const {base,request} = fixture();
+    request.leaders.push({ ...request.leaders[0]!, id: "new", existingMemberId: null, placementId: "root", startMonth: 1 });
+    const moved = movePlacement(base,request,"sub","strategy-new");
+    const result = (await runStrategy(base,moved)).variants[0]!.bands.standard;
+    expect(result.months[1]!.organization!.find(n => n.id === "sub")!.parentId).toBe("strategy-new");
+    expect(result.months[1]!.ids.find(i => i.id === "sub")!.ownerId).toBe("root");
+    const delayed = structuredClone(moved); delayed.leaders[1]!.startMonth = 100;
+    const pending = (await runStrategy(base,delayed)).variants[0]!.bands.standard;
+    expect(pending.months.at(-1)!.organization!.find(n => n.id === "sub")!.parentId).toBe("root");
+    expect(pending.warnings.some(w => w.includes("予定移動は未反映"))).toBe(true);
   });
   it("keeps growth identity after moving a branch under a slower leader", async () => {
     const { base, request } = fixture();

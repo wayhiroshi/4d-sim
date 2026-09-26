@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { COURSES, TITLE_ORDER, type BonusBreakdown, type Member, type OrganizationSnapshot, type PlanConfig, type SavedForecast, type TaxProfile, type TitleCode } from "./types";
 
-export const STRATEGY_VERSION = "2.2.1";
+export const STRATEGY_VERSION = "2.4.2";
 export const CHECKPOINTS = [100, 300, 500, 1000, 1500, 2000] as const;
 export const BANDS = ["conservative", "standard", "challenge"] as const;
 export type Band = typeof BANDS[number];
@@ -34,6 +34,7 @@ export const leaderSchema = z.object({
 });
 export const actionSchema = z.object({
   id, kind: z.enum(["create-sub", "delete-sub", "move", "qualification", "change-course"]),
+  displayName: z.string().trim().min(1).max(80).optional(),
   month, memberId: id, parentId: id.nullable(), ownerId: id.nullable(),
   course: z.enum(COURSES).default("G"),
   requiredMemberId: id.nullable(), requiredTitle: z.enum(TITLE_ORDER).default("NONE"),
@@ -45,6 +46,7 @@ export const actionSchema = z.object({
 export const strategyRequestSchema = z.object({
   placementMode: z.enum(["search", "manual"]).default("search"),
   placementOverrides: z.record(id, id).default({}),
+  growthPriority: z.array(z.object({ memberId: id, title: z.enum(TITLE_ORDER).refine(t => t !== "NONE") })).max(12).default([]),
   goalBasis: z.enum(["members", "title"]).default("members"),
   name: z.string().trim().max(120).default("試算"), rootId: id, partnerId: id.nullable(),
   targetId: id, targetTitle: z.enum(TITLE_ORDER).default("TRD"), targetIds: z.number().int().min(100).max(5000).default(2000),
@@ -91,6 +93,8 @@ export interface StrategyMonth {
   month: number; period: string; count: number; enrolled: number; inactive: number; exited: number; ownedSubs: number; pv: number;
   targetTitle: TitleCode; missing: string[]; gross: number; recurring: number; recurringNet: number; recurringCashflow: number; line: number; net: number; costs: number; cashflow: number; cumulative: number;
   ids: IdIncome[]; payees: Array<{ id: string; bonus: BonusBreakdown }>; changes: string[];
+  /** Same-month tree; absent on older saved revisions. */
+  organization?: StrategyNode[];
 }
 export interface StrategyCheckpointResult { memberCount: number; reached: boolean; reachedMonth: number | null; actualCount: number; remaining: number; snapshot: StrategyMonth | null; organization: StrategyNode[] }
 export interface StrategyNode { id: string; name: string; parentId: string | null; introducerId: string | null; ownerId: string | null; course: string; title: TitleCode; count: number; active: number; depth: number; enrolled?: boolean }
