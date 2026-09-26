@@ -1,3 +1,4 @@
+import type { ManualPurchase } from "./shared/manual-purchase";
 import type {
   DashboardData,
   BatchSimulationMemberInput,
@@ -42,7 +43,7 @@ export const api = {
   titleChecklists: (period?: string) => request<TitleChecklistData>(`/api/v1/titles/checklist${period ? `?period=${period}` : ""}`),
   tree: (period?: string) => request<OrganizationSnapshot>(`/api/v1/members/tree${period ? `?period=${period}` : ""}`),
   simulationOrganization: (period?: string) => request<SimulationOrganization>(`/api/v1/simulation-organization${period ? `?period=${period}` : ""}`),
-  createMember: (member: Omit<Member, "id" | "workspaceId" | "trainerBonusRole">) => request<Member>("/api/v1/members", { method: "POST", body: JSON.stringify(member) }),
+  createMember: (member: Omit<Member, "id" | "workspaceId" | "trainerBonusRole"> & { purchase?: ManualPurchase }) => request<Member>("/api/v1/members", { method: "POST", body: JSON.stringify(member) }),
   renameMember: (id: string, displayName: string) => request<{ id: string; displayName: string }>(`/api/v1/members/${encodeURIComponent(id)}/display-name`, { method: "PATCH", body: JSON.stringify({ displayName }) }),
   updateMemberIdentity: (id: string, displayName: string, idKind: Member["idKind"], masterMemberId: string | null, parentMemberId: string | null) => request<{ id: string; displayName: string; idKind: Member["idKind"] }>(`/api/v1/members/${encodeURIComponent(id)}/identity`, { method: "PATCH", body: JSON.stringify({ displayName, idKind, masterMemberId, parentMemberId }) }),
   saveTrainerProfile: (profile: TrainerQualificationProfile) => request<TrainerQualificationProfile>(`/api/v1/members/${encodeURIComponent(profile.memberId)}/trainer-profile`, { method: "PATCH", body: JSON.stringify(profile) }),

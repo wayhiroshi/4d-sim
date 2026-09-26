@@ -1,0 +1,40 @@
+.org-workspace { display: flex; flex-direction: column; gap: 14px; }
+.org-workspace > .page-heading { margin-bottom: 0; }
+.org-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.org-toolbar p { margin: 0; font-size: 14px; }
+.org-toolbar-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.org-toolbar-actions button { padding: 11px 15px; border-radius: 12px; border: 1px solid #b9cec4; background: white; color: #17654f; font-weight: 700; cursor: pointer; }
+.org-toolbar-actions button[aria-expanded="true"] { background: #17654f; color: white; }
+.org-workspace .organization-layout { grid-template-columns: minmax(0,1fr); }
+.org-map { min-width: 0; }
+.org-map-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.org-map-heading h2 { margin: 0; }
+.org-map-heading button { background: white; border: 1px solid #cfdbd4; border-radius: 8px; padding: 9px; margin-left: 5px; color: #17654f; cursor: pointer; }
+.org-map-help,.org-map-legend { color: #53685e; font-size: 12px; line-height: 1.7; }
+.org-map ul { list-style: none; margin: 0; padding: 0; }
+.org-map li { position: relative; min-width: 0; }
+.org-map li > ul { border-left: 2px solid #a4bfb1; margin: 0 0 10px 20px; padding: 6px 0 0 22px; }
+.org-map li > ul > li::before { content: ""; position: absolute; left: -22px; top: 30px; width: 22px; border-top: 2px solid #a4bfb1; }
+.org-person { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; border: 1px solid #c8d8ce; border-radius: 12px; background: #f6faf7; margin: 6px 0; padding: 5px 10px 9px; }
+.org-person.is-trial { border: 2px dashed #b89126; background: #fffaf0; }
+.org-person.is-selected { outline: 2px solid #17654f; outline-offset: 1px; }
+.org-branch-button { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 48px; padding: 6px 0; background: none; border: 0; color: #18352e; text-align: left; cursor: pointer; }
+.org-branch-button:disabled { opacity: 1; cursor: default; }
+.org-branch-button > span:last-child { min-width: 0; }
+.org-chevron { width: 20px; flex-shrink: 0; font-size: 18px; color: #17654f; text-align: center; }
+.org-branch-button strong { display: block; font-size: 16px; overflow-wrap: anywhere; }
+.org-branch-button em { color: #17654f; font-style: normal; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.org-branch-button small { display: block; margin-top: 4px; font-size: 12px; color: #53685e; }
+.org-detail-button { background: white; border: 1px solid #c7d6cc; border-radius: 9px; min-height: 44px; padding: 8px 10px; color: #17654f; font-size: 12px; cursor: pointer; }
+.org-person-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; padding-left: 28px; grid-column: 1/-1; color: #53685e; font-size: 12px; }
+.org-map-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 0; }
+.org-detail-empty { text-align: center; color: #53685e; padding: 32px 20px; }
+.org-secondary > summary { cursor: pointer; padding: 12px 0; font-weight: 700; color: #17654f; }
+.org-workspace .status-message { margin: 0; }
+.manual-purchase-fields { display: grid; gap: 12px; grid-column: 1/-1; min-width: 0; margin: 8px 0; padding: 16px; border: 1px solid #c7d6cc; border-radius: 12px; }
+.manual-purchase-fields legend { font-weight: 700; padding: 0 6px; }
+.manual-purchase-fields label { display: grid; gap: 6px; min-width: 0; }
+.manual-purchase-fields input, .manual-purchase-fields select { width: 100%; min-width: 0; min-height: 44px; padding: 10px; font: inherit; font-size: 16px; border: 1px solid #c7d6cc; border-radius: 8px; background: white; }
+.member-purchase-section { border-top: 1px solid #e0e6df; margin-top: 20px; padding-top: 8px; }
+@media(min-width:900px) { .org-workspace .organization-layout { grid-template-columns: minmax(0,1.5fr) minmax(280px,1fr); align-items: start; } }
+@media(max-width:600px) { .org-map li > ul { margin-left: 9px; padding-left: 10px; } .org-map li > ul > li::before { left: -10px; width: 10px; } .org-person { padding-left: 5px; padding-right: 6px; } .org-branch-button { gap: 4px; } .org-branch-button strong { font-size: 14px; } .org-person-meta { padding-left: 24px; font-size: 11px; } }

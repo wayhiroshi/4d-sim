@@ -9,6 +9,34 @@ const zeroTax: TaxProfile = { invoiceRegistered: true, withholdingRate: 0, trans
 const rank = (title: TitleCode) => TITLE_ORDER.indexOf(title);
 const stableCompare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const alive = (m: Member, period: string) => m.joinedPeriod <= period && (!m.endedPeriod || m.endedPeriod > period);
+/** Route only the owner's future introductions. Existing members and introducers stay unchanged. */
+export function priorityTarget(base: OrganizationSnapshot, request: StrategySimulationRequest, owner: string, acquired: Map<string, TitleCode>): string | null {
+  const stages = request.growthPriority.filter(p => {
+    const member = base.members.find(m => m.id === p.memberId);
+    return member && (member.masterMemberId ?? member.id) === owner;
+  });
+  if (!stages.length) return null;
+  return stages.find(p => rank(acquired.get(p.memberId) ?? "NONE") < rank(p.title))?.memberId ?? owner;
+}
+
+/** Fill LD/DR's shallow-line shortages before using ordinary breadth-first overflow.
+ * This only changes placement, never the member's introducer or qualifications. */
+export function titlePriorityPlacement(members: Member[], activeIds: Set<string>, target: string): string {
+  const children = (id: string) => members.filter(m => m.parentMemberId === id && activeIds.has(m.id));
+  const first = children(target);
+  if (first.length < planConfig.ld.firstLineActive) return target;
+  const second = first.flatMap(m => children(m.id));
+  if (second.length < planConfig.director.pattern1.second) {
+    const available = first.filter(m => children(m.id).length < planConfig.firstLineLimit);
+    return available.sort((a,b) => children(a.id).length - children(b.id).length || stableCompare(a.id,b.id))[0]?.id ?? target;
+  }
+  const third = second.flatMap(m => children(m.id));
+  if (third.length < planConfig.director.pattern1.third) {
+    const available = second.filter(m => children(m.id).length < planConfig.firstLineLimit);
+    return available.sort((a,b) => children(a.id).length - children(b.id).length || stableCompare(a.id,b.id))[0]?.id ?? target;
+  }
+  return target;
+}
 export function inputFingerprint(base: OrganizationSnapshot, input: StrategySimulationRequest): string {
   // Reproducibility marker; not used for authentication or integrity decisions.
   const text = JSON.stringify({ base, input, version: STRATEGY_VERSION, plan: planConfig.version });
@@ -25,6 +53,11 @@ export function validateStrategyBase(base: OrganizationSnapshot, request: Strate
   const owners = [request.rootId, ...(request.partnerId ? [request.partnerId] : [])];
   for (const owner of owners) if (byId.get(owner)?.idKind !== "master") throw new Error("所有者はメインIDを選択してください");
   const household = new Set(base.members.filter((m) => owners.includes(m.id) || owners.includes(m.masterMemberId ?? "")).map((m) => m.id));
+  if (new Set(request.growthPriority.map(p => p.memberId)).size !== request.growthPriority.length) throw new Error("育成順のIDが重複しています");
+  for (const stage of request.growthPriority) {
+    const planned = request.allowSubCreation && request.actions.some(a => a.kind === "create-sub" && a.memberId === stage.memberId && owners.includes(a.ownerId ?? "") && !byId.has(a.memberId));
+    if (!planned && (!household.has(stage.memberId) || !alive(byId.get(stage.memberId)!, base.period))) throw new Error("育成順は在籍する所有IDまたは作成予定の所有サブから選択してください");
+  }
   if (!household.has(request.targetId)) throw new Error("目標IDは自分・パートナー・所有サブから選択してください");
   if (!alive(byId.get(request.targetId)!, base.period)) throw new Error("目標IDは出発点の営業月で在籍しているIDを選択してください");
   for (const m of base.members) {
@@ -64,8 +97,12 @@ export function evaluateStrategyMonth(base: OrganizationSnapshot, request: Strat
     if (!alive(m, snapshot.period)) { m.title = "NONE"; continue; }
     const historical = acquired.get(m.id) ?? m.title;
     m.title = historical;
-    if (m.id === request.targetId) missing = (evaluateTitleChecklists(snapshot, m.id).find((c) => c.code === request.targetTitle)?.conditions ?? [])
-      .filter((c) => !c.met).map((c) => `${c.label}：${c.current} / ${c.required}`);
+    if (m.id === request.targetId) {
+      const checks = evaluateTitleChecklists(snapshot, m.id);
+      const codes = new Set([request.targetTitle, ...(rank(request.targetTitle) >= rank("DR") ? ["LD", "DR"] : [])]);
+      missing = [...new Set(checks.filter(c => codes.has(c.code)).flatMap(c => c.conditions.filter(condition => !condition.met)
+        .map(condition => `${c.code}：${condition.label}${typeof condition.current === "boolean" ? "が未達" : `：${condition.current} / ${condition.required}`}`)))];
+    }
     // A never-DR leaf cannot meet LD's required first/second lines, nor any
     // higher acquisition condition. Historical DRs still need maintenance.
     const evaluated = !children.has(m.id) && rank(historical) < rank("DR") ? "NONE" : evaluateTitle(snapshot, m.id).achievedTitle;
@@ -134,18 +171,20 @@ export function candidateStrategies(base: OrganizationSnapshot, request: Strateg
   const directPlacements = Object.fromEntries(request.leaders.filter((l) => l.existingMemberId).map((l) => [l.id, [l.placementId]]));
   const candidates: StrategyCandidate[] = [{ id: "manual", label: "手動配置", placements: Object.fromEntries(fresh.map((l) => [l.id, l.placementId])), introducers, directPlacements, actions: request.actions }];
   if (request.placementMode === "manual") return candidates;
-  // Bounded deterministic beam over leader anchors. Detailed member placement
-  // is replayed, never resampled, for each retained candidate and growth band.
+  // Enumerate small assignment spaces. In larger spaces retain concentration
+  // seeds explicitly; never discard them solely because they are unbalanced.
   let beam: Array<Record<string, string>> = [{}];
+  const exhaustive = fresh.reduce((count, leader) => count * new Set([leader.placementId, request.rootId, ...anchors]).size, 1) <= 64;
   for (const leader of fresh) {
-    const choices = [...new Set([leader.placementId, request.rootId, ...anchors])].slice(0, 8);
+    const choices = [...new Set([leader.placementId, request.rootId, ...anchors])];
     const expanded = beam.flatMap((state) => choices.map((anchor) => ({ ...state, [leader.id]: anchor })));
     expanded.sort((a, b) => {
       const balance = (x: Record<string, string>) => Math.max(...Object.values(x).map((v) => Object.values(x).filter((a) => a === v).length));
       return balance(a) - balance(b) || stableCompare(JSON.stringify(a), JSON.stringify(b));
     });
-    beam = expanded.slice(0, 24);
+    beam = exhaustive ? expanded : expanded.slice(0, 24);
   }
+  for (const anchor of anchors) beam.push(Object.fromEntries(fresh.map(l => [l.id, anchor])));
   beam.forEach((placements, i) => {
     const selectedIntroducers = { ...introducers };
     if (request.allowIntroducerIdChoice) for (const l of fresh) {
@@ -298,7 +337,8 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
   const quota = (key: string, amount: number) => { const x = (residuals.get(key) ?? 0) + amount; const n = Math.floor(x + 1e-9); residuals.set(key, x - n); return n; };
   const months: StrategyMonth[] = []; const warnings = new Set<string>();
   const checkpoints: StrategyVariantResult["checkpoints"] = CHECKPOINTS.map((count) => ({ memberCount: count, reached: false, reachedMonth: null, actualCount: 0, remaining: count, snapshot: null, organization: [] }));
-  const done = new Set<string>(); const keyIds = new Set([...baselineOwned, ...request.leaders.map(profileMemberId)]);
+  const done = new Set<string>(); const keyIds = new Set([...base.members.map(m => m.id), ...baselineOwned, ...request.leaders.map(profileMemberId)]);
+  const pendingPlacements = new Map(Object.entries(request.placementOverrides).filter(([, parent]) => !base.members.some(m => m.id === parent)));
   const orderedProfiles: LeaderGrowthProfile[] = [];
   const visitedProfiles = new Set<string>();
   const orderProfile = (profile: LeaderGrowthProfile) => {
@@ -312,6 +352,11 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
   const reservedSlots = (except?: string) => {
     const reserved = new Map<string, number>();
     if (request.placementMode !== "manual") return reserved;
+    for (const parent of pendingPlacements.values()) reserved.set(parent, (reserved.get(parent) ?? 0) + 1);
+    for (const a of candidate.actions) if (a.kind === "create-sub" && request.allowSubCreation && !people.some(p => p.member.id === a.memberId)) {
+      const parent = a.parentId ?? a.ownerId;
+      if (parent) reserved.set(parent, (reserved.get(parent) ?? 0) + 1);
+    }
     for (const l of request.leaders) if (!l.existingMemberId && l.id !== except && !people.some(p => p.member.id === profileMemberId(l))) {
       const parent = candidate.placements[l.id] ?? l.placementId;
       reserved.set(parent, (reserved.get(parent) ?? 0) + 1);
@@ -328,6 +373,24 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
   for (let month = 0; month <= Math.max(request.horizonMonths, completionMonth === null ? 0 : completionMonth + 12); month++) {
     const period = nextPeriod(base.period, month); const changes: string[] = []; let births = 0;
     if (month > 0) {
+      const applyPendingPlacements = () => {
+        // Retry chains after each successful move; parents can join in different months.
+        let moved = true;
+        while (moved) {
+          moved = false;
+          for (const [id, parentId] of pendingPlacements) {
+            const person = people.find(p => p.member.id === id && !p.exited);
+            const parent = people.find(p => p.member.id === parentId && !p.exited);
+            if (!person || !parent) continue;
+            const members = people.map(p => p.member);
+            const below = new Set(descendants({ ...snapshot, members }, id).map(d => d.member.id));
+            if (below.has(parentId) || placementSlot(members, parentId, period) !== parentId) continue;
+            person.member.parentMemberId = parentId;
+            pendingPlacements.delete(id); moved = true;
+            changes.push(`${person.member.displayName}のチームを${parent.member.displayName}の下へ移動（試算）`);
+          }
+        }
+      };
       // Membership changes use qualification conditions from the previous closed month.
       const applyActions = () => {
       for (const action of candidate.actions) {
@@ -341,7 +404,7 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
           const parent = placementSlot(members, action.parentId ?? action.ownerId, period);
           if (!parent || parent !== (action.parentId ?? action.ownerId)) continue;
           const m = blankMember(action.memberId, parent, base.workspaceId, period);
-          Object.assign(m, { displayName: "試算サブ", idKind: "sub", masterMemberId: action.ownerId, introducerMemberId: action.ownerId, course: action.course });
+          Object.assign(m, { displayName: action.displayName ?? "試算サブ", idKind: "sub", masterMemberId: action.ownerId, introducerMemberId: action.ownerId, course: action.course });
           add(m, null, month); keyIds.add(m.id);
         } else if (action.kind === "delete-sub") {
           if (!request.allowSubDeletion || !request.provisionalCompression || !person || person.exited || person.member.idKind !== "sub" || !owners.includes(person.member.masterMemberId ?? "") || person.member.id === request.targetId) continue;
@@ -367,6 +430,7 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
       }
       };
       applyActions();
+      applyPendingPlacements();
       for (const profile of orderedProfiles) {
         const stress = request.stress;
         const delayed = stress.kind === "leader-delay" && (!stress.leaderId || stress.leaderId === profile.id) ? stress.duration : 0;
@@ -399,6 +463,7 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
           const member = blankMember(profileMemberId(profile), parent, base.workspaceId, period);
           Object.assign(member, { displayName: profile.name, course: profile.leaderCourse, introducerMemberId: candidate.introducers[profile.id] ?? profile.introducerId });
           add(member, profile.id, month); leader = people.at(-1)!; births++;
+          applyPendingPlacements();
         }
         if (!leader || leader.exited) continue;
         const team = people.filter((p) => p.profileId === profile.id && !p.exited && !baselineOwned.has(p.member.id) && p.joinedMonth < month);
@@ -430,12 +495,18 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
         const capacity = potentials();
         capacity.exceeded().forEach(w => warnings.add(w));
         const slots = placementIndex(people.map((p) => p.member), period, reservedSlots());
+        const priorityBase = request.growthPriority.length ? { ...base, members: people.filter(p => !p.exited).map(p => p.member) } : base;
         for (const recruiter of planned) {
           if (activeCount >= request.targetIds || profileCount >= quotas.get(profile.id)! || people.length >= 5000) break;
-          const targets = recruiter === leader && profile.existingMemberId ? candidate.directPlacements[profile.id] ?? [profile.placementId] : [recruiter.member.id];
+          const recruiterOwner = recruiter.member.masterMemberId ?? recruiter.member.id;
+          const priority = recruiter === leader && baselineOwned.has(recruiter.member.id)
+            ? priorityTarget(priorityBase, request, recruiterOwner, acquired) : null;
+          const targets = priority ? [priority] : recruiter === leader && profile.existingMemberId ? candidate.directPlacements[profile.id] ?? [profile.placementId] : [recruiter.member.id];
           const turn = directPlacementTurns.get(profile.id) ?? 0;
           const wanted = targets[turn % targets.length]!;
-          const parent = slots.slot(wanted, id => {
+          const developing = priority && request.growthPriority.some(s => s.memberId === priority && rank(acquired.get(priority) ?? "NONE") < rank(s.title));
+          const placement = developing ? titlePriorityPlacement(people.map(p => p.member), new Set(people.filter(p => p.active && !p.exited).map(p => p.member.id)), wanted) : wanted;
+          const parent = slots.slot(placement, id => {
             const blocked = capacity.blocking(id); if (blocked) warnings.add(blocked); return !blocked;
           });
           if (!parent) continue;
@@ -452,6 +523,7 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
       // A qualification scheduled for a newly joined leader can apply in the
       // joining month, before that month's titles and payouts are evaluated.
       applyActions();
+      applyPendingPlacements();
       const currentPurchases: PurchaseEvent[] = [];
       for (const p of people) {
         if (p.exited || !p.active || p.member.joinedPeriod > period) continue;
@@ -475,11 +547,12 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
       if (person) { person.member.directorPromotedPeriod = m.directorPromotedPeriod; person.member.trainerCredential = m.trainerCredential; }
     }
     if (month > 0) cumulative += row.cashflow;
+    row.organization = summarizeOrganization(snapshot, request.rootId, keyIds, request.provisionalCompression);
     row.cumulative = cumulative; row.changes = changes; months.push(row);
     if (rank(row.targetTitle) >= rank(request.targetTitle) && titleMonth === null) titleMonth = month;
     if (titleMonth !== null && rank(row.targetTitle) < rank(request.targetTitle)) maintenanceFailures++;
     for (const checkpoint of checkpoints) if (!checkpoint.reached && row.count >= checkpoint.memberCount) {
-      Object.assign(checkpoint, { reached: true, reachedMonth: month, actualCount: row.count, remaining: 0, snapshot: row, organization: summarizeOrganization(snapshot, request.rootId, keyIds, request.provisionalCompression) });
+      Object.assign(checkpoint, { reached: true, reachedMonth: month, actualCount: row.count, remaining: 0, snapshot: row, organization: row.organization });
     }
     if ((request.goalBasis === "title" ? rank(row.targetTitle) >= rank(request.targetTitle) : row.count >= request.targetIds) && completionMonth === null) {
       completionMonth = month; completion = row;
@@ -492,13 +565,14 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
           const line = own.reduce((s, id) => s + id.line, 0), director = own.reduce((s, id) => s + id.director, 0), title = own.reduce((s, id) => s + id.titleBonus, 0);
           return { id: owner, bonus: settleBonus({ start: 0, trainer: 0, line, director, title, gross: line + director + title }, period, { ...(request.taxes[owner] ?? zeroTax), priorCarryover: 0 }) };
         }) };
-      finalOrganization = summarizeOrganization(snapshot, request.rootId, keyIds, request.provisionalCompression);
+      finalOrganization = row.organization;
     }
     lastBirths = births;
     yield month;
   }
   const last = months.at(-1)!;
-  if (!finalOrganization.length) finalOrganization = summarizeOrganization(snapshot, request.rootId, keyIds, request.provisionalCompression);
+  for (const id of pendingPlacements.keys()) warnings.add(`${base.members.find(m => m.id === id)?.displayName ?? id}の予定移動は未反映です。移動先の加入時期・空き・配置関係を確認してください`);
+  if (!finalOrganization.length) finalOrganization = last.organization!;
   checkpoints.filter((c) => !c.reached).forEach((c) => { c.remaining = Math.max(0, c.memberCount - last.count); c.actualCount = last.count; });
   const noFutureGrowth = request.leaders.every((l) => l.phases.every((p) => p.rates[band].introductions === 0 && (p.rates[band].activity === 0 || p.rates[band].perRecruiter === 0)) && l.startMonth <= request.horizonMonths);
   const canReactivate = people.some((p) => !p.exited && !p.active && p.profileId && profiles.get(p.profileId)?.phases.some((phase) => phase.rates[band].reactivation > 0));
@@ -507,6 +581,15 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
   if (months.some((m) => m.exited > 0)) warnings.add("通常IDの退会後は、配下の在籍と元の段数を維持する仮定です。通常退会の公式圧縮条件は未確認です");
   if (!request.taxes[request.partnerId ?? request.rootId]) warnings.add("未入力の支払先は控除なしで試算しています");
   warnings.add("初月は初回購入と当月リピートの両方を計上する前提です");
+  for (const stage of request.growthPriority) {
+    if (rank(acquired.get(stage.memberId) ?? "NONE") >= rank(stage.title)) continue;
+    const m = snapshot.members.find(m => m.id === stage.memberId);
+    if (!m || !alive(m, snapshot.period)) continue;
+    const codes = new Set([stage.title, ...(rank(stage.title) >= rank("DR") ? ["LD", "DR"] : [])]);
+    for (const check of evaluateTitleChecklists(snapshot, m.id).filter(c => codes.has(c.code))) {
+      for (const c of check.conditions.filter(c => !c.met)) warnings.add(`育成優先 ${m.displayName}：${check.code}・${c.label}${typeof c.current === "boolean" ? "が未達" : ` ${c.current}/${c.required}`}`);
+    }
+  }
   const post = completionMonth === null ? [] : months.filter((m) => m.month > completionMonth! && m.month <= completionMonth! + 12);
   const recentStart = months[Math.max(0, months.length - 13)]!;
   const recentMonthlyGrowth = last.month > recentStart.month ? (last.count - recentStart.count) / (last.month - recentStart.month) : 0;
@@ -516,7 +599,7 @@ export function* simulateStrategy(base: OrganizationSnapshot, request: StrategyS
     postCompletionAverage: post.length === 12 ? post.reduce((s, m) => s + m.recurringCashflow, 0) / 12 : null,
     maintenanceFailures, warnings: [...warnings], pendingActions: candidate.actions.filter((a) => !done.has(a.id)).map((a) => a.id),
     finalDesign: { target: request.targetIds, allocated: fixedMembers + [...quotas.values()].reduce((a, b) => a + b, 0), remaining: totalWeight ? 0 : freeSlots, fixedMembers,
-      lines: request.leaders.map((l) => ({ leaderId: profileMemberId(l), parentId: l.existingMemberId ? base.members.find((m) => m.id === l.existingMemberId)?.parentMemberId ?? request.rootId : candidate.placements[l.id] ?? l.placementId, quota: quotas.get(l.id)! })) } };
+      lines: request.leaders.map((l) => ({ leaderId: profileMemberId(l), parentId: l.existingMemberId ? request.placementOverrides[l.existingMemberId] ?? base.members.find((m) => m.id === l.existingMemberId)?.parentMemberId ?? request.rootId : candidate.placements[l.id] ?? l.placementId, quota: quotas.get(l.id)! })) } };
 }
 
 export interface StrategyProgress { completed: number; total: number; candidate: string; band: Band; month: number }

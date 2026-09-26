@@ -59,7 +59,7 @@ function Chart({ variants, band, selected }: { variants: StrategySimulationResul
 }
 
 export default function StrategyStudio() {
-  const [panel, setPanel] = useState<"workspace" | "settings" | "saved">("workspace");
+  const [panel, setPanel] = useState<"workspace" | "settings" | "saved" | "qualifications">("workspace");
   const [reference, setReference] = useState<Comparison | null>(null);
   const [context, setContext] = useState<StrategyContext | null>(null);
   const [input, setInput] = useState<StrategySimulationRequest | null>(null);
@@ -76,6 +76,7 @@ export default function StrategyStudio() {
   const [versions, setVersions] = useState<Array<{ id: string; name: string; created_at: string }>>([]);
   const [previewApply, setPreviewApply] = useState(false);
   const worker = useRef<Worker | null>(null);
+  const computationId = useRef(0);
   const workingBase = useMemo(() => frozenBase ?? (context ? filteredBase(context, input?.includeTrial ?? true) : null), [frozenBase, context, input?.includeTrial]);
   useEffect(() => {
     let live = true;
@@ -91,16 +92,16 @@ export default function StrategyStudio() {
       const base = reuseBase ?? workingBase ?? filteredBase(context, checked.includeTrial);
       setInput(checked);
       setBusy(true); setError(""); setMessage(""); setRevisionId(null); setProgress(null);
-      worker.current?.terminate();
-      const w = new Worker(new URL("./strategy-worker.ts", import.meta.url), { type: "module" }); worker.current = w;
-      w.onmessage = (event: MessageEvent<{ type: string; progress?: StrategyProgress; result?: StrategySimulationResult; error?: string }>) => {
-        if (worker.current !== w) return;
+      const job = ++computationId.current;
+      const w = worker.current ?? new Worker(new URL("./strategy-worker.ts", import.meta.url), { type: "module" }); worker.current = w;
+      w.onmessage = (event: MessageEvent<{ job: number; type: string; progress?: StrategyProgress; result?: StrategySimulationResult; error?: string; cached?: boolean; elapsedMs?: number }>) => {
+        if (worker.current !== w || event.data.job !== computationId.current) return;
         if (event.data.type === "progress") setProgress(event.data.progress!);
-        if (event.data.type === "result") { setResult(event.data.result!); setFrozenInput(checked); setFrozenBase(base); setBusy(false); setSelectedMonth(0); w.terminate(); }
-        if (event.data.type === "error") { setError(event.data.error!); setBusy(false); w.terminate(); }
+        if (event.data.type === "result") { setResult(event.data.result!); setFrozenInput(checked); setFrozenBase(base); setBusy(false); setSelectedMonth(0); setMessage(event.data.cached ? "計算済みの案を再表示しました" : `再計算 ${(Number(event.data.elapsedMs) / 1000).toFixed(1)}秒`); }
+        if (event.data.type === "error") { setError(event.data.error!); setBusy(false); }
       };
-      w.onerror = () => { if (worker.current !== w) return; setError("計算を完了できませんでした。入力を確認して再実行してください"); setBusy(false); w.terminate(); };
-      w.postMessage({ request: checked, base });
+      w.onerror = () => { if (worker.current !== w) return; setError("計算を完了できませんでした。入力を確認して再実行してください"); setBusy(false); w.terminate(); worker.current = null; };
+      w.postMessage({ job, request: checked, base });
     } catch (e) { setError(e instanceof Error ? e.message : "入力を確認してください"); }
   };
   const selected = result?.variants.find((v) => v.objective === objective)?.bands[band];
@@ -116,6 +117,8 @@ export default function StrategyStudio() {
     catch (e) { setError((e as Error).message); } finally { setSaving(false); }
   };
   const openRevision = async (id: string) => {
+    computationId.current++;
+    worker.current?.terminate(); worker.current = null; setBusy(false); setProgress(null);
     try { const revision = await call<StrategyRevision>(`/revisions/${id}`); const request = strategyRequestSchema.parse(revision.request); setInput(request); setFrozenInput(request); setFrozenBase(revision.base); setResult(revision.result); setPlanId(revision.planId); setRevisionId(revision.id); setSelectedMonth(0); setVersions(await call(`/plans/${revision.planId}/revisions`)); setMessage("保存時の出発点と結果を表示しています"); setPanel("workspace"); }
     catch (e) { setError((e as Error).message); }
   };
@@ -157,7 +160,12 @@ export default function StrategyStudio() {
     {error && <p className="error" role="alert">{error}</p>}{message && <p className="status-message" role="status">{message}</p>}
     {busy && <p role="status">{progress ? `${labels[progress.band]}・${elapsed(progress.month)}を計算中…` : "計算を開始しています…"}</p>}
     <StrategyCanvas base={workingBase!} input={input} result={result} busy={busy} dirty={dirty} band={band} setBand={setBand} change={setInput} compute={compute}
-      settings={() => setPanel("settings")} saved={() => setPanel("saved")} save={() => void save(true)} saving={saving} cancel={cancel} addTeam={template} reference={reference} setReference={setReference}/>
+      settings={() => setPanel("settings")} qualifications={() => setPanel("qualifications")} saved={() => setPanel("saved")} save={() => void save(true)} saving={saving} cancel={cancel} addTeam={template} reference={reference} setReference={setReference}/>
+  </div>;
+  if (panel === "qualifications") return <div className="studio"><header className="studio-heading"><h1>将来の変更・資格取得予定</h1><button onClick={() => setPanel("workspace")}>試算に戻る</button></header>
+    <p>途中で条件を満たす予定を変更できます。実組織の登録情報は変更しません。</p>
+    <ActionEditor input={input} update={update} members={members.map(m => ({ id: m.id, name: m.displayName }))} expanded/>
+    <button className="primary-button" disabled={busy} onClick={() => { setPanel("workspace"); compute(input); }}>この予定で再計算</button>
   </div>;
   if (panel === "saved") return <div className="studio studio-v3"><div className="studio-heading"><h1>保存したプラン</h1><button onClick={() => setPanel("workspace")}>組織と比較に戻る</button></div><p>入力・出発点・結果を保存時のまま開きます。案Aを基準にして別の案を開くと比較できます。</p>{error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
     {plans.length === 0 && <p>保存したプランはまだありません。</p>}{plans.map(p => <section className="panel" key={p.id}><h2>{p.name}</h2><small>{p.updatedAt.slice(0, 10)}</small><div className="studio-actions"><button disabled={busy} onClick={() => void openRevision(p.revisionId)}>プランを開く</button><button disabled={busy} onClick={async () => { try { const r = await call<StrategyRevision>(`/revisions/${p.revisionId}`); setReference({ input: strategyRequestSchema.parse(r.request), result: r.result, base: r.base }); setMessage(`「${r.name}」を比較基準Aに固定しました`); } catch (e) { setError((e as Error).message); } }}>比較基準Aにする</button></div></section>)}
@@ -233,12 +241,12 @@ export default function StrategyStudio() {
   </div>;
 }
 
-function ActionEditor({ input, update, members }: { input: StrategySimulationRequest; update: (patch: Partial<StrategySimulationRequest>) => void; members: Array<{ id: string; name: string }> }) {
+function ActionEditor({ input, update, members, expanded = false }: { input: StrategySimulationRequest; update: (patch: Partial<StrategySimulationRequest>) => void; members: Array<{ id: string; name: string }>; expanded?: boolean }) {
   const owners = [input.rootId, ...(input.partnerId ? [input.partnerId] : [])];
   const choices = [...members, ...input.leaders.filter((l) => !l.existingMemberId).map((l) => ({ id: `strategy-${l.id}`, name: l.name })),
     ...input.actions.filter((a) => a.kind === "create-sub").map((a) => ({ id: a.memberId, name: "作成予定のサブ" })),
     ...owners.flatMap((owner) => Array.from({ length: 3 }, (_, i) => ({ id: `strategy-sub-${owner}-${i}`, name: `${members.find((m) => m.id === owner)?.name}の探索サブ ${i + 1}` })))];
-  return <details><summary>資格取得・サブ・アップ変更の操作予定（{input.actions.length}件）</summary>
+  return <details open={expanded || undefined}><summary>資格取得・サブ・アップ変更の操作予定（{input.actions.length}件）</summary>
     <p>指定月以降、必要なタイトルが成立した時に実行します。資格は受講などの予定と人数条件がそろった時に取得として計算します。</p>
     {input.actions.map((action, index) => { const set = (patch: Partial<typeof action>) => update({ actions: input.actions.map((a, i) => i === index ? { ...a, ...patch } : a) });
       return <fieldset key={action.id} className="studio-leader"><legend>操作 {index + 1}</legend><div className="studio-form">

@@ -21,6 +21,20 @@ function simulate(base: OrganizationSnapshot, request: StrategySimulationRequest
 }
 
 describe("Strategy Studio monthly engine", () => {
+  it("diagnoses a 4,001-ID organization stuck before DR and awards DR only after explicit prerequisites", () => {
+    const {base,request}=fixture();
+    base.members[0]!.course="A"; base.members[0]!.sponsorLicense=false;
+    for(let i=1;i<=4001;i++) base.members.push(blankMember(`large-${i}`, i<=7?"root":`large-${Math.floor((i-1)/7)}`,"demo",base.period));
+    base.purchases=base.members.map(m=>({...base.purchases[0]!,id:`p-${m.id}`,memberId:m.id,pv:5330}));
+    const blocked=evaluateStrategyMonth(base,request,0,new Map(),new Map()).row;
+    expect(blocked.count).toBe(4001);
+    expect(blocked.targetTitle).not.toBe("DR");
+    expect(blocked.missing.some(s=>s.includes("本人がB・Gコース"))).toBe(true);
+    expect(blocked.missing.some(s=>s.includes("スポンサーライセンス"))).toBe(true);
+    base.members[0]!.course="G";base.members[0]!.sponsorLicense=true;
+    const qualified=evaluateStrategyMonth(base,request,0,new Map(),new Map()).row;
+    expect(qualified.targetTitle).toBe("DR");
+  });
   it.each([0, 100, 250, 300])("caps the entire downline at %i rather than giving that capacity to every recruiter", (potential) => {
     const { base, request } = fixture();
     const leader = request.leaders[0]!;
